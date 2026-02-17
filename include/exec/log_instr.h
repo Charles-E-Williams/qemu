@@ -286,6 +286,14 @@ void qemu_log_instr_ld_cap(CPUArchState *env, target_ulong addr,
  */
 void qemu_log_instr_st_cap(CPUArchState *env, target_ulong addr,
                            const cap_register_t *value);
+
+/*
+ * Log authorizing capability memory access.
+ */
+                         
+void qemu_log_instr_mem_auth_cap(CPUArchState *env,
+                                 const cap_register_t *auth,
+                                 uint32_t regnum);                           
 #endif
 
 /*

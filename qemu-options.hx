@@ -4213,10 +4213,10 @@ SRST
 ERST
 
 DEF("cheri-trace-format", HAS_ARG, QEMU_OPTION_cheri_trace_format, \
-"-cheri-trace-format [text|cvtrace]     Select CHERI trace mode.\n", QEMU_ARCH_ALL)
+"-cheri-trace-format [text|cvtrace|champsim|champsimcheri]     Select CHERI trace mode.\n", QEMU_ARCH_ALL)
 SRST
 ``-cheri-trace-format type``
-    Set CHERI trace format to <type> (text or cvtrace)
+    Set CHERI trace format to <type> (text, cvtrace, champsim, champsimcheri)
 ERST
 
 DEF("cheri-c2e-on-unrepresentable", 0, QEMU_OPTION_cheri_c2e_on_unrepresentable, \
@@ -4413,6 +4413,18 @@ SRST
 ``-old-param``
     Old param mode (ARM only).
 ERST
+
+DEF("simpoints", HAS_ARG, QEMU_OPTION_simpoints,
+    "-simpoints file=SIMPOINTS_FILE[,interval=INTERVAL_SIZE][,warmup=WARMUP_INSTRUCTIONS][,format=FORMAT][,start_pc=START_PC]\n"
+    "               Enable tracing using the SimPoints methodology\n"
+    "               file=SIMPOINTS_FILE: path to the SimPoints file\n" 
+    "               interval=INTERVAL_SIZE: SimPoints interval size (default 1B)\n"
+    "               warmup=WARMUP_INSTRUCTIONS: Number of warmup instructions (default 0)\n"
+    "               format=FORMAT: 'pc' for PC-based or 'interval' for interval-based (default)\n"
+    "                 PC format: PC execution_count interval_number per line\n"
+    "                 Interval format: interval_number per line\n"
+    "               start_pc=START_PC: PC address where tracing should begin (e.g., main function)\n",
+    QEMU_ARCH_ALL)
 
 DEF("sandbox", HAS_ARG, QEMU_OPTION_sandbox, \
     "-sandbox on[,obsolete=allow|deny][,elevateprivileges=allow|deny|children]\n" \

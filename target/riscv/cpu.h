@@ -127,6 +127,9 @@ struct CPURISCVState {
 #endif
     uint64_t fpr[32]; /* assume both F and D extensions */
 
+    uint64_t qemu_icount;
+    int qemu_icount_enable;
+
     /* vector coprocessor state. */
     uint64_t vreg[32 * RV_VLEN_MAX / 64] QEMU_ALIGNED(16);
     target_ulong vxrm;

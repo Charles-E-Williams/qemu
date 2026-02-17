@@ -53,7 +53,9 @@
 typedef enum {
     QLI_FMT_TEXT = 0,
     QLI_FMT_CVTRACE = 1,
-    QLI_FMT_NOP = 2
+    QLI_FMT_NOP = 2,
+    QLI_FMT_CHAMPSIM = 3,
+    QLI_FMT_CHAMPSIMCHERI = 4
 } qemu_log_instr_fmt_t;
 
 extern qemu_log_instr_fmt_t qemu_log_instr_format;
@@ -122,12 +124,55 @@ typedef struct {
     uint64_t valid_entries; /* bitmap of which entries are valid */
 } qemu_log_printf_buf_t;
 
+typedef enum {
+    BRANCH_DIRECT_JUMP = 0,
+    BRANCH_INDIRECT,
+    BRANCH_CONDITIONAL,
+    BRANCH_DIRECT_CALL,
+    BRANCH_INDIRECT_CALL,
+    BRANCH_RETURN,
+    BRANCH_CJAL,
+    BRANCH_CJALR,
+    BRANCH_OTHER,
+    NOT_BRANCH
+} qemu_log_branch_type_t;
+
+
+typedef enum {
+    LOG_REG_TYPE_NONE,
+    LOG_REG_TYPE_GPR,     // General Purpose Integer Register
+    LOG_REG_TYPE_CAP,    // CHERI Capability Register
+    LOG_REG_TYPE_FPR,     // Floating-Point Register
+} LogRegType;
+
+typedef struct {
+    uint8_t     reg_id;    // Register index (0-31)
+    LogRegType  type;       // Our new type
+} qemu_log_reg_info;
+
+
+
+/* SimPoint entry structures */
+typedef struct {
+    uint64_t pc;              /* PC address to trigger on */
+    uint64_t execution_count;     /* Trigger when PC executed this many times */
+} simpoint_pc_entry_t;
+
+typedef struct {
+    uint64_t start;              /* Start instruction count for interval */
+    uint64_t adjusted_start;     /* Adjusted for warmup */
+    uint64_t warmup_length;      /* Warmup duration */
+} simpoint_interval_entry_t;
+
 /*
  * Per-cpu logging state.
  */
 typedef struct {
+
     /* Per-CPU instruction log level */
     qemu_log_instr_loglevel_t loglevel;
+    uint64_t simpoint_insn_count;
+
     /* Is the current log level active or paused? */
     bool loglevel_active;
     /* Force skipping of the current instruction being logged */

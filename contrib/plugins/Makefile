@@ -6,7 +6,7 @@
 # cflags that the main configure has already done for us.
 #
 
-BUILD_DIR := $(CURDIR)/../..
+BUILD_DIR := /opt/cheri/build/qemu-build
 
 include $(BUILD_DIR)/config-host.mak
 
@@ -18,6 +18,8 @@ NAMES += hotpages
 NAMES += howvec
 NAMES += lockstep
 NAMES += hwprofile
+NAMES += bbv
+NAMES += pc_counter
 
 SONAMES := $(addsuffix .so,$(addprefix lib,$(NAMES)))
 
@@ -27,6 +29,7 @@ CFLAGS = $(GLIB_CFLAGS)
 CFLAGS += -fPIC
 CFLAGS += $(if $(findstring no-psabi,$(QEMU_CFLAGS)),-Wpsabi)
 CFLAGS += -I$(SRC_PATH)/include/qemu
+
 
 all: $(SONAMES)
 

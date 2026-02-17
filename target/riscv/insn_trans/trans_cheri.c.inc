@@ -43,12 +43,26 @@ typedef void(cheri_int_cap_helper)(TCGv, TCGv_env, TCGv_i32);
 static inline bool gen_cheri_int_cap(DisasContext *ctx, int rd, int cs,
                                  cheri_int_cap_helper *gen_func)
 {
+    // Log source: cs is a capability register
+    TCGv_i32 cs_id = tcg_const_i32(cs);
+    TCGv_i32 type_cap = tcg_const_i32(LOG_REG_TYPE_CAP);
+    gen_helper_qemu_log_reg_src(cpu_env, cs_id, type_cap);
+    tcg_temp_free_i32(type_cap);
+    
+    // Log destination: rd is a GPR
+    TCGv_i32 rd_id = tcg_const_i32(rd);
+    TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
+    gen_helper_qemu_log_reg_dst(cpu_env, rd_id, type_gpr);
+    tcg_temp_free_i32(rd_id);
+    tcg_temp_free_i32(type_gpr);
+    
     TCGv_i32 source_regnum = tcg_const_i32(cs);
     TCGv result = tcg_temp_new();
     gen_func(result, cpu_env, source_regnum);
     gen_set_gpr(rd, result);
     tcg_temp_free(result);
     tcg_temp_free_i32(source_regnum);
+    tcg_temp_free_i32(cs_id);
     return true;
 }
 
@@ -59,6 +73,19 @@ typedef void(cheri_cap_cap_helper)(TCGv_env, TCGv_i32, TCGv_i32);
 static inline bool gen_cheri_cap_cap(int cd, int cs,
                                      cheri_cap_cap_helper *gen_func)
 {
+    // Log source: cs is a capability register
+    TCGv_i32 cs_id = tcg_const_i32(cs);
+    TCGv_i32 type_cap = tcg_const_i32(LOG_REG_TYPE_CAP);
+    gen_helper_qemu_log_reg_src(cpu_env, cs_id, type_cap);
+    tcg_temp_free_i32(cs_id);
+    
+    // Log destination: cd is a capability register
+    TCGv_i32 cd_id = tcg_const_i32(cd);
+    gen_helper_qemu_log_reg_dst(cpu_env, cd_id, type_cap);
+    tcg_temp_free_i32(cd_id);
+    
+    tcg_temp_free_i32(type_cap);
+    
     TCGv_i32 dest_regnum = tcg_const_i32(cd);
     TCGv_i32 source_regnum = tcg_const_i32(cs);
     gen_func(cpu_env, dest_regnum, source_regnum);
@@ -74,6 +101,20 @@ static inline QEMU_ALWAYS_INLINE bool
 gen_cheri_cap_int_plus_imm(int cd, int rs, target_long imm,
                            cheri_cap_int_helper *gen_func)
 {
+    // Log source: rs is a GPR
+    TCGv_i32 rs_id = tcg_const_i32(rs);
+    TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
+    gen_helper_qemu_log_reg_src(cpu_env, rs_id, type_gpr);
+    tcg_temp_free_i32(rs_id);
+    tcg_temp_free_i32(type_gpr);
+    
+    // Log destination: cd is a capability register
+    TCGv_i32 cd_id = tcg_const_i32(cd);
+    TCGv_i32 type_cap = tcg_const_i32(LOG_REG_TYPE_CAP);
+    gen_helper_qemu_log_reg_dst(cpu_env, cd_id, type_cap);
+    tcg_temp_free_i32(cd_id);
+    tcg_temp_free_i32(type_cap);
+    
     TCGv_i32 dest_regnum = tcg_const_i32(cd);
     TCGv gpr_value = tcg_temp_new();
     gen_get_gpr(gpr_value, rs);
@@ -94,6 +135,20 @@ typedef void(cheri_int_int_helper)(TCGv, TCGv_env, TCGv);
 static inline bool gen_cheri_int_int(DisasContext *ctx, int rd, int rs,
                                      cheri_int_int_helper *gen_func)
 {
+    // Log source: rs is a GPR
+    TCGv_i32 rs_id = tcg_const_i32(rs);
+    TCGv_i32 type_gpr_s = tcg_const_i32(LOG_REG_TYPE_GPR);
+    gen_helper_qemu_log_reg_src(cpu_env, rs_id, type_gpr_s);
+    tcg_temp_free_i32(rs_id);
+    tcg_temp_free_i32(type_gpr_s);
+    
+    // Log destination: rd is a GPR
+    TCGv_i32 rd_id = tcg_const_i32(rd);
+    TCGv_i32 type_gpr_d = tcg_const_i32(LOG_REG_TYPE_GPR);
+    gen_helper_qemu_log_reg_dst(cpu_env, rd_id, type_gpr_d);
+    tcg_temp_free_i32(rd_id);
+    tcg_temp_free_i32(type_gpr_d);
+    
     TCGv result = tcg_temp_new();
     TCGv gpr_src_value = tcg_temp_new();
     gen_get_gpr(gpr_src_value, rs);
@@ -108,6 +163,24 @@ typedef void(cheri_cap_cap_cap_helper)(TCGv_env, TCGv_i32, TCGv_i32, TCGv_i32);
 static inline bool gen_cheri_cap_cap_cap(int cd, int cs1, int cs2,
                                          cheri_cap_cap_cap_helper *gen_func)
 {
+    TCGv_i32 type_cap = tcg_const_i32(LOG_REG_TYPE_CAP);
+    
+    // Log sources: cs1 and cs2 are capability registers
+    TCGv_i32 cs1_id = tcg_const_i32(cs1);
+    gen_helper_qemu_log_reg_src(cpu_env, cs1_id, type_cap);
+    tcg_temp_free_i32(cs1_id);
+    
+    TCGv_i32 cs2_id = tcg_const_i32(cs2);
+    gen_helper_qemu_log_reg_src(cpu_env, cs2_id, type_cap);
+    tcg_temp_free_i32(cs2_id);
+    
+    // Log destination: cd is a capability register
+    TCGv_i32 cd_id = tcg_const_i32(cd);
+    gen_helper_qemu_log_reg_dst(cpu_env, cd_id, type_cap);
+    tcg_temp_free_i32(cd_id);
+    
+    tcg_temp_free_i32(type_cap);
+    
     TCGv_i32 dest_regnum = tcg_const_i32(cd);
     TCGv_i32 source_regnum1 = tcg_const_i32(cs1);
     TCGv_i32 source_regnum2 = tcg_const_i32(cs2);
@@ -126,6 +199,26 @@ static inline bool
 gen_cheri_cap_cap_int_plus_imm(int cd, int cs1, int rs2, target_long imm,
                                cheri_cap_cap_int_helper *gen_func)
 {
+    // Log source: cs1 is a capability register
+    TCGv_i32 cs1_id = tcg_const_i32(cs1);
+    TCGv_i32 type_cap = tcg_const_i32(LOG_REG_TYPE_CAP);
+    gen_helper_qemu_log_reg_src(cpu_env, cs1_id, type_cap);
+    tcg_temp_free_i32(cs1_id);
+    
+    // Log source: rs2 is a GPR
+    TCGv_i32 rs2_id = tcg_const_i32(rs2);
+    TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
+    gen_helper_qemu_log_reg_src(cpu_env, rs2_id, type_gpr);
+    tcg_temp_free_i32(rs2_id);
+    tcg_temp_free_i32(type_gpr);
+    
+    // Log destination: cd is a capability register
+    TCGv_i32 cd_id = tcg_const_i32(cd);
+    gen_helper_qemu_log_reg_dst(cpu_env, cd_id, type_cap);
+    tcg_temp_free_i32(cd_id);
+    
+    tcg_temp_free_i32(type_cap);
+    
     TCGv_i32 dest_regnum = tcg_const_i32(cd);
     TCGv_i32 source_regnum = tcg_const_i32(cs1);
     TCGv gpr_value = tcg_temp_new();
@@ -147,6 +240,20 @@ static inline bool gen_cheri_cap_loadstore(DisasContext *ctx, int srcdst,
                                            int auth, target_long imm,
                                            cheri_cap_loadstore_helper *gen_func)
 {
+    // Note: srcdst can be either a source (for stores) or destination (for loads)
+    // auth is always a source (capability register used for addressing)
+    
+    // Log auth: always a capability register source
+    TCGv_i32 auth_id = tcg_const_i32(auth);
+    TCGv_i32 type_cap = tcg_const_i32(LOG_REG_TYPE_CAP);
+    gen_helper_qemu_log_reg_src(cpu_env, auth_id, type_cap);
+    tcg_temp_free_i32(auth_id);
+    tcg_temp_free_i32(type_cap);
+    
+    // Note: We don't log srcdst here because it depends on whether this is
+    // a load or store, which is determined by the specific helper function.
+    // The caller should handle this.
+    
     TCGv_i32 srcdest_regnum = tcg_const_i32(srcdst);
     TCGv_i32 auth_regnum = tcg_const_i32(auth);
     TCGv addr = tcg_temp_new();
@@ -166,6 +273,26 @@ static inline bool gen_cheri_int_cap_cap(DisasContext *ctx, int rd, int cs1,
                                          int cs2,
                                          cheri_int_cap_cap_helper *gen_func)
 {
+    TCGv_i32 type_cap = tcg_const_i32(LOG_REG_TYPE_CAP);
+    
+    // Log sources: cs1 and cs2 are capability registers
+    TCGv_i32 cs1_id = tcg_const_i32(cs1);
+    gen_helper_qemu_log_reg_src(cpu_env, cs1_id, type_cap);
+    tcg_temp_free_i32(cs1_id);
+    
+    TCGv_i32 cs2_id = tcg_const_i32(cs2);
+    gen_helper_qemu_log_reg_src(cpu_env, cs2_id, type_cap);
+    tcg_temp_free_i32(cs2_id);
+    
+    tcg_temp_free_i32(type_cap);
+    
+    // Log destination: rd is a GPR
+    TCGv_i32 rd_id = tcg_const_i32(rd);
+    TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
+    gen_helper_qemu_log_reg_dst(cpu_env, rd_id, type_gpr);
+    tcg_temp_free_i32(rd_id);
+    tcg_temp_free_i32(type_gpr);
+    
     TCGv_i32 source_regnum1 = tcg_const_i32(cs1);
     TCGv_i32 source_regnum2 = tcg_const_i32(cs2);
     TCGv result = tcg_temp_new();
@@ -255,6 +382,19 @@ typedef void(cheri_cap_cap_imm_helper)(TCGv_env, TCGv_i32, TCGv_i32, TCGv);
 static inline bool gen_cheri_cap_cap_imm(int cd, int cs1, target_long imm,
                                          cheri_cap_cap_imm_helper *gen_func)
 {
+    // Log source: cs1 is a capability register
+    TCGv_i32 cs1_id = tcg_const_i32(cs1);
+    TCGv_i32 type_cap = tcg_const_i32(LOG_REG_TYPE_CAP);
+    gen_helper_qemu_log_reg_src(cpu_env, cs1_id, type_cap);
+    tcg_temp_free_i32(cs1_id);
+    
+    // Log destination: cd is a capability register
+    TCGv_i32 cd_id = tcg_const_i32(cd);
+    gen_helper_qemu_log_reg_dst(cpu_env, cd_id, type_cap);
+    tcg_temp_free_i32(cd_id);
+    
+    tcg_temp_free_i32(type_cap);
+    
     TCGv_i32 dest_regnum = tcg_const_i32(cd);
     TCGv_i32 source_regnum = tcg_const_i32(cs1);
     TCGv imm_value = tcg_const_tl(imm);
@@ -328,12 +468,39 @@ static bool trans_jalr_cap(DisasContext *ctx, arg_jalr_cap *a)
 
 static bool trans_jalr_pcc(DisasContext *ctx, arg_jalr_pcc *a)
 {
+    // Uses PCC, log rs1 as GPR
+    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+    TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
+    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_gpr);
+    tcg_temp_free_i32(rs1);
+    
+    if (a->rd != 0) {
+        TCGv_i32 rd = tcg_const_i32(a->rd);
+        gen_helper_qemu_log_reg_dst(cpu_env, rd, type_gpr);
+        tcg_temp_free_i32(rd);
+    }
+    
+    tcg_temp_free_i32(type_gpr);
+    
     gen_jalr(ctx, a->rd, a->rs1, 0);
     return true;
 }
 
 static inline bool trans_cinvoke(DisasContext *ctx, arg_cinvoke *a)
 {
+    TCGv_i32 type_cap = tcg_const_i32(LOG_REG_TYPE_CAP);
+    
+    // Log sources: rs1 and rs2 are capability registers
+    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_cap);
+    tcg_temp_free_i32(rs1);
+    
+    TCGv_i32 rs2 = tcg_const_i32(a->rs2);
+    gen_helper_qemu_log_reg_src(cpu_env, rs2, type_cap);
+    tcg_temp_free_i32(rs2);
+    
+    tcg_temp_free_i32(type_cap);
+    
     TCGv_i32 code_regnum = tcg_const_i32(a->rs1);
     TCGv_i32 data_regnum = tcg_const_i32(a->rs2);
     gen_helper_cinvoke(cpu_env, code_regnum, data_regnum);
@@ -341,7 +508,6 @@ static inline bool trans_cinvoke(DisasContext *ctx, arg_cinvoke *a)
     tcg_temp_free_i32(data_regnum);
 
     lookup_and_goto_ptr(ctx);
-    // PC has been updated -> exit translation block
     ctx->base.is_jmp = DISAS_NORETURN;
     return true;
 }
@@ -384,10 +550,36 @@ static inline bool gen_cap_load(DisasContext *ctx, int32_t rd, int32_t cs,
 #define TRANSLATE_EXPLICIT_LOAD(name, op)                                      \
     static bool trans_##name##_ddc(DisasContext *ctx, arg_##name##_ddc *a)     \
     {                                                                          \
+        /* Log source: rs1 is GPR (address offset from DDC) */                \
+        TCGv_i32 rs1 = tcg_const_i32(a->rs1);                                  \
+        TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);                   \
+        gen_helper_qemu_log_reg_src(cpu_env, rs1, type_gpr);                   \
+        tcg_temp_free_i32(rs1);                                                \
+                                                                               \
+        /* Log destination: rd is GPR (loaded value) */                       \
+        TCGv_i32 rd = tcg_const_i32(a->rd);                                    \
+        gen_helper_qemu_log_reg_dst(cpu_env, rd, type_gpr);                    \
+        tcg_temp_free_i32(rd);                                                 \
+        tcg_temp_free_i32(type_gpr);                                           \
+                                                                               \
         return gen_ddc_load(ctx, a->rd, a->rs1, op);                           \
     }                                                                          \
     static bool trans_##name##_cap(DisasContext *ctx, arg_##name##_cap *a)     \
     {                                                                          \
+        /* Log source: rs1 is CAP (address capability) */                     \
+        TCGv_i32 rs1 = tcg_const_i32(a->rs1);                                  \
+        TCGv_i32 type_cap = tcg_const_i32(LOG_REG_TYPE_CAP);                   \
+        gen_helper_qemu_log_reg_src(cpu_env, rs1, type_cap);                   \
+        tcg_temp_free_i32(rs1);                                                \
+        tcg_temp_free_i32(type_cap);                                           \
+                                                                               \
+        /* Log destination: rd is GPR (loaded value) */                       \
+        TCGv_i32 rd = tcg_const_i32(a->rd);                                    \
+        TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);                   \
+        gen_helper_qemu_log_reg_dst(cpu_env, rd, type_gpr);                    \
+        tcg_temp_free_i32(rd);                                                 \
+        tcg_temp_free_i32(type_gpr);                                           \
+                                                                               \
         return gen_cap_load(ctx, a->rd, a->rs1, /*offset=*/0, op);             \
     }
 
@@ -405,14 +597,20 @@ TRANSLATE_EXPLICIT_LOAD(ld_wu, MO_UL)
 
 static inline bool trans_ld_c_ddc(DisasContext *ctx, arg_ld_c_ddc *a)
 {
-    // always uses DDC as the base register
+    // DON'T log anything here - gen_cheri_cap_int_plus_imm does it all
     return gen_cheri_cap_int_plus_imm(a->rd, a->rs1, 0,
                                       &gen_helper_load_cap_via_ddc);
 }
 
 static inline bool trans_ld_c_cap(DisasContext *ctx, arg_ld_c_cap *a)
 {
-    // No immediate available for lccap
+    // Log destination only - gen_cheri_cap_loadstore logs the source
+    TCGv_i32 rd = tcg_const_i32(a->rd);
+    TCGv_i32 type_cap = tcg_const_i32(LOG_REG_TYPE_CAP);
+    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_cap);
+    tcg_temp_free_i32(rd);
+    tcg_temp_free_i32(type_cap);
+    
     return gen_cheri_cap_loadstore(ctx, a->rd, a->rs1, 0,
                                    &gen_helper_load_cap_via_cap);
 }
@@ -420,11 +618,20 @@ static inline bool trans_ld_c_cap(DisasContext *ctx, arg_ld_c_cap *a)
 static inline bool trans_lc(DisasContext *ctx, arg_lc *a)
 {
     if (!ctx->capmode) {
-        // Without capmode we load relative to DDC (lc instructions)
+        // DDC mode - gen_cheri_cap_int_plus_imm logs BOTH src and dst
         return gen_cheri_cap_int_plus_imm(a->rd, a->rs1, a->imm,
                                           &gen_helper_load_cap_via_ddc);
     }
-    return gen_cheri_cap_loadstore(ctx, a->rd, a->rs1, /*offset=*/a->imm,
+    
+    // Capability mode - need to log destination manually
+    TCGv_i32 rd = tcg_const_i32(a->rd);
+    TCGv_i32 type_cap = tcg_const_i32(LOG_REG_TYPE_CAP);
+    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_cap);
+    tcg_temp_free_i32(rd);
+    tcg_temp_free_i32(type_cap);
+    
+    // gen_cheri_cap_loadstore logs rs1 (CAP) as source
+    return gen_cheri_cap_loadstore(ctx, a->rd, a->rs1, a->imm,
                                    &gen_helper_load_cap_via_cap);
 }
 
@@ -442,7 +649,7 @@ static bool gen_ddc_store(DisasContext *ctx, int rs1, int rs2, MemOp memop)
     return true;
 }
 
-/* Load Via Capability Register */
+/* Store Via Capability Register */
 static inline bool gen_cap_store_mem_idx(DisasContext *ctx, int32_t addr_regnum,
                                          int32_t val_regnum, target_long offset,
                                          int mem_idx, MemOp op)
@@ -471,10 +678,36 @@ static inline bool gen_cap_store(DisasContext *ctx, int32_t addr_regnum,
 #define TRANSLATE_EXPLICIT_STORE(name, op)                                     \
     static bool trans_##name##_ddc(DisasContext *ctx, arg_##name##_ddc *a)     \
     {                                                                          \
+        /* Log source: rs1 is GPR (address offset from DDC) */                \
+        TCGv_i32 rs1 = tcg_const_i32(a->rs1);                                  \
+        TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);                   \
+        gen_helper_qemu_log_reg_src(cpu_env, rs1, type_gpr);                   \
+        tcg_temp_free_i32(rs1);                                                \
+                                                                               \
+        /* Log source: rs2 is GPR (value to store) */                         \
+        TCGv_i32 rs2 = tcg_const_i32(a->rs2);                                  \
+        gen_helper_qemu_log_reg_src(cpu_env, rs2, type_gpr);                   \
+        tcg_temp_free_i32(rs2);                                                \
+        tcg_temp_free_i32(type_gpr);                                           \
+                                                                               \
         return gen_ddc_store(ctx, a->rs1, a->rs2, op);                         \
     }                                                                          \
     static bool trans_##name##_cap(DisasContext *ctx, arg_##name##_cap *a)     \
     {                                                                          \
+        /* Log source: rs1 is CAP (address capability) */                     \
+        TCGv_i32 rs1 = tcg_const_i32(a->rs1);                                  \
+        TCGv_i32 type_cap = tcg_const_i32(LOG_REG_TYPE_CAP);                   \
+        gen_helper_qemu_log_reg_src(cpu_env, rs1, type_cap);                   \
+        tcg_temp_free_i32(rs1);                                                \
+        tcg_temp_free_i32(type_cap);                                           \
+                                                                               \
+        /* Log source: rs2 is GPR (value to store) */                         \
+        TCGv_i32 rs2 = tcg_const_i32(a->rs2);                                  \
+        TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);                   \
+        gen_helper_qemu_log_reg_src(cpu_env, rs2, type_gpr);                   \
+        tcg_temp_free_i32(rs2);                                                \
+        tcg_temp_free_i32(type_gpr);                                           \
+                                                                               \
         return gen_cap_store(ctx, a->rs1, a->rs2, /*offset=*/0, op);           \
     }
 
@@ -488,27 +721,76 @@ TRANSLATE_EXPLICIT_STORE(st_d, MO_Q)
 // RS2 is the value, RS1 is the capability/ddc offset
 static inline bool trans_st_c_ddc(DisasContext *ctx, arg_st_c_ddc *a)
 {
-    // always uses DDC as the base register
-    return gen_cheri_cap_int_plus_imm(a->rs2, a->rs1, 0,
-                                      &gen_helper_store_cap_via_ddc);
+    // Log source: rs1 is a GPR (address offset from DDC)
+    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+    TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
+    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_gpr);
+    tcg_temp_free_i32(rs1);
+    tcg_temp_free_i32(type_gpr);
+    
+    // Log source: rs2 is a capability register (data to store)
+    TCGv_i32 rs2 = tcg_const_i32(a->rs2);
+    TCGv_i32 type_cap = tcg_const_i32(LOG_REG_TYPE_CAP);
+    gen_helper_qemu_log_reg_src(cpu_env, rs2, type_cap);
+    tcg_temp_free_i32(rs2);
+    tcg_temp_free_i32(type_cap);
+    
+    // Call helper directly without gen_cheri_cap_int_plus_imm wrapper
+    TCGv_i32 dest_regnum = tcg_const_i32(a->rs2);
+    TCGv gpr_value = tcg_temp_new();
+    gen_get_gpr(gpr_value, a->rs1);
+    gen_helper_store_cap_via_ddc(cpu_env, dest_regnum, gpr_value);
+    tcg_temp_free(gpr_value);
+    tcg_temp_free_i32(dest_regnum);
+    
+    return true;
 }
 
 static inline bool trans_st_c_cap(DisasContext *ctx, arg_st_c_cap *a)
 {
-    // No immediate available for sc.cap
-    return gen_cheri_cap_loadstore(ctx, a->rs2, a->rs1, /*offset=*/0,
+    // Log source: rs2 is a capability register (data to store)
+    TCGv_i32 rs2 = tcg_const_i32(a->rs2);
+    TCGv_i32 type_cap = tcg_const_i32(LOG_REG_TYPE_CAP);
+    gen_helper_qemu_log_reg_src(cpu_env, rs2, type_cap);
+    tcg_temp_free_i32(rs2);
+    tcg_temp_free_i32(type_cap);
+    
+    // gen_cheri_cap_loadstore logs rs1 (auth/address) as source
+    return gen_cheri_cap_loadstore(ctx, a->rs2, a->rs1, 0,
                                    &gen_helper_store_cap_via_cap);
 }
 
 static inline bool trans_sc(DisasContext *ctx, arg_sc *a)
 {
-    // RS2 is the value, RS1 is the capability
+    // Log source: rs2 is a capability register (data to store)
+    TCGv_i32 rs2 = tcg_const_i32(a->rs2);
+    TCGv_i32 type_cap = tcg_const_i32(LOG_REG_TYPE_CAP);
+    gen_helper_qemu_log_reg_src(cpu_env, rs2, type_cap);
+    tcg_temp_free_i32(rs2);
+    tcg_temp_free_i32(type_cap);
+    
     if (!ctx->capmode) {
-        // Without capmode we store relative to DDC (sc instructions)
-        return gen_cheri_cap_int_plus_imm(a->rs2, a->rs1, a->imm,
-                                          &gen_helper_store_cap_via_ddc);
+        // DDC mode: rs1 is GPR
+        TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+        TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
+        gen_helper_qemu_log_reg_src(cpu_env, rs1, type_gpr);
+        tcg_temp_free_i32(rs1);
+        tcg_temp_free_i32(type_gpr);
+        
+        // Call helper directly
+        TCGv_i32 dest_regnum = tcg_const_i32(a->rs2);
+        TCGv gpr_value = tcg_temp_new();
+        gen_get_gpr(gpr_value, a->rs1);
+        tcg_gen_addi_tl(gpr_value, gpr_value, a->imm);
+        gen_helper_store_cap_via_ddc(cpu_env, dest_regnum, gpr_value);
+        tcg_temp_free(gpr_value);
+        tcg_temp_free_i32(dest_regnum);
+        
+        return true;
     }
-    return gen_cheri_cap_loadstore(ctx, a->rs2, a->rs1, /*offset=*/a->imm,
+    
+    // Capability mode: gen_cheri_cap_loadstore logs rs1 as capability source
+    return gen_cheri_cap_loadstore(ctx, a->rs2, a->rs1, a->imm,
                                    &gen_helper_store_cap_via_cap);
 }
 
@@ -523,7 +805,7 @@ static inline bool trans_lr_c_impl(DisasContext *ctx, arg_atomic *a,
         ctx->base.is_jmp = DISAS_NORETURN;
     } else {
         // Note: we ignore the Acquire/release flags since using
-        // helper_exit_atomic forces exlusive execution so we get SC semantics.
+        // helper_exit_atomic forces exclusive execution so we get SC semantics.
         tcg_debug_assert(a->rs2 == 0);
         gen_cheri_cap_cap(a->rd, a->rs1, helper);
     }
@@ -591,7 +873,7 @@ static inline bool trans_amoswap_c(DisasContext *ctx, arg_amoswap_c *a)
         ctx->base.is_jmp = DISAS_NORETURN;
     } else {
         // Note: we ignore the Acquire/release flags since using
-        // helper_exit_atomic forces exlusive execution so we get SC semantics.
+        // helper_exit_atomic forces exclusive execution so we get SC semantics.
         gen_cheri_cap_cap_cap(a->rd, a->rs1, a->rs2, &gen_helper_amoswap_cap);
     }
     return true;
@@ -606,6 +888,21 @@ static inline bool gen_lr_impl(DisasContext *ctx, TCGv_cap_checked_ptr addr,
     static bool trans_##name##_ddc(DisasContext *ctx, arg_##name##_ddc *a)     \
     {                                                                          \
         REQUIRE_EXT(ctx, RVA);                                                 \
+                                                                               \
+        /* Log source: rs1 is GPR (address offset from DDC) */                \
+        TCGv_i32 rs1 = tcg_const_i32(a->rs1);                                  \
+        TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);                   \
+        gen_helper_qemu_log_reg_src(cpu_env, rs1, type_gpr);                   \
+        tcg_temp_free_i32(rs1);                                                \
+        tcg_temp_free_i32(type_gpr);                                           \
+                                                                               \
+        /* Log destination: rd is GPR (loaded value) */                       \
+        TCGv_i32 rd = tcg_const_i32(a->rd);                                    \
+        TCGv_i32 type_gpr_d = tcg_const_i32(LOG_REG_TYPE_GPR);                 \
+        gen_helper_qemu_log_reg_dst(cpu_env, rd, type_gpr_d);                  \
+        tcg_temp_free_i32(rd);                                                 \
+        tcg_temp_free_i32(type_gpr_d);                                         \
+                                                                               \
         TCGv_cap_checked_ptr addr = tcg_temp_new_cap_checked();                \
         generate_get_ddc_checked_gpr_plus_offset(                              \
             addr, ctx, a->rs1, 0, op, &generate_ddc_checked_load_ptr);         \
@@ -616,6 +913,21 @@ static inline bool gen_lr_impl(DisasContext *ctx, TCGv_cap_checked_ptr addr,
     static bool trans_##name##_cap(DisasContext *ctx, arg_##name##_cap *a)     \
     {                                                                          \
         REQUIRE_EXT(ctx, RVA);                                                 \
+                                                                               \
+        /* Log source: rs1 is CAP (address capability) */                     \
+        TCGv_i32 rs1 = tcg_const_i32(a->rs1);                                  \
+        TCGv_i32 type_cap = tcg_const_i32(LOG_REG_TYPE_CAP);                   \
+        gen_helper_qemu_log_reg_src(cpu_env, rs1, type_cap);                   \
+        tcg_temp_free_i32(rs1);                                                \
+        tcg_temp_free_i32(type_cap);                                           \
+                                                                               \
+        /* Log destination: rd is GPR (loaded value) */                       \
+        TCGv_i32 rd = tcg_const_i32(a->rd);                                    \
+        TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);                   \
+        gen_helper_qemu_log_reg_dst(cpu_env, rd, type_gpr);                    \
+        tcg_temp_free_i32(rd);                                                 \
+        tcg_temp_free_i32(type_gpr);                                           \
+                                                                               \
         TCGv_cap_checked_ptr addr = tcg_temp_new_cap_checked();                \
         generate_cap_load_check_imm(addr, a->rs1, 0, op);                      \
         bool result = gen_lr_impl(ctx, addr, a, op);                           \
@@ -636,6 +948,27 @@ static inline bool gen_sc_impl(DisasContext *ctx, TCGv_cap_checked_ptr addr,
     static bool trans_##name##_ddc(DisasContext *ctx, arg_##name##_ddc *a)     \
     {                                                                          \
         REQUIRE_EXT(ctx, RVA);                                                 \
+                                                                               \
+        /* Log source: rs1 is GPR (address offset from DDC) */                \
+        TCGv_i32 rs1 = tcg_const_i32(a->rs1);                                  \
+        TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);                   \
+        gen_helper_qemu_log_reg_src(cpu_env, rs1, type_gpr);                   \
+        tcg_temp_free_i32(rs1);                                                \
+                                                                               \
+        /* Log source: rs2 is GPR (value to store) */                         \
+        TCGv_i32 rs2 = tcg_const_i32(a->rs2);                                  \
+        gen_helper_qemu_log_reg_src(cpu_env, rs2, type_gpr);                   \
+        tcg_temp_free_i32(rs2);                                                \
+        tcg_temp_free_i32(type_gpr);                                           \
+                                                                               \
+        /* Log destination: rd is GPR (success/failure) */                    \
+        /* Note: rd = rs2, assigned below */                                  \
+        TCGv_i32 rd = tcg_const_i32(a->rs2);                                   \
+        TCGv_i32 type_gpr_d = tcg_const_i32(LOG_REG_TYPE_GPR);                 \
+        gen_helper_qemu_log_reg_dst(cpu_env, rd, type_gpr_d);                  \
+        tcg_temp_free_i32(rd);                                                 \
+        tcg_temp_free_i32(type_gpr_d);                                         \
+                                                                               \
         TCGv_cap_checked_ptr addr = tcg_temp_new_cap_checked();                \
         generate_get_ddc_checked_gpr_plus_offset(                              \
             addr, ctx, a->rs1, 0, op, &generate_ddc_checked_load_ptr);         \
@@ -647,6 +980,29 @@ static inline bool gen_sc_impl(DisasContext *ctx, TCGv_cap_checked_ptr addr,
     static bool trans_##name##_cap(DisasContext *ctx, arg_##name##_cap *a)     \
     {                                                                          \
         REQUIRE_EXT(ctx, RVA);                                                 \
+                                                                               \
+        /* Log source: rs1 is CAP (address capability) */                     \
+        TCGv_i32 rs1 = tcg_const_i32(a->rs1);                                  \
+        TCGv_i32 type_cap = tcg_const_i32(LOG_REG_TYPE_CAP);                   \
+        gen_helper_qemu_log_reg_src(cpu_env, rs1, type_cap);                   \
+        tcg_temp_free_i32(rs1);                                                \
+        tcg_temp_free_i32(type_cap);                                           \
+                                                                               \
+        /* Log source: rs2 is GPR (value to store) */                         \
+        TCGv_i32 rs2 = tcg_const_i32(a->rs2);                                  \
+        TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);                   \
+        gen_helper_qemu_log_reg_src(cpu_env, rs2, type_gpr);                   \
+        tcg_temp_free_i32(rs2);                                                \
+        tcg_temp_free_i32(type_gpr);                                           \
+                                                                               \
+        /* Log destination: rd is GPR (success/failure) */                    \
+        /* Note: rd = rs2, assigned below */                                  \
+        TCGv_i32 rd = tcg_const_i32(a->rs2);                                   \
+        TCGv_i32 type_gpr_d = tcg_const_i32(LOG_REG_TYPE_GPR);                 \
+        gen_helper_qemu_log_reg_dst(cpu_env, rd, type_gpr_d);                  \
+        tcg_temp_free_i32(rd);                                                 \
+        tcg_temp_free_i32(type_gpr_d);                                         \
+                                                                               \
         TCGv_cap_checked_ptr addr = tcg_temp_new_cap_checked();                \
         generate_cap_load_check_imm(addr, a->rs1, 0, op);                      \
         a->rd = a->rs2; /* Not enough encoding space for explicit rd */        \

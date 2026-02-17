@@ -169,6 +169,7 @@ static const char *watchdog;
 static const char *qtest_chrdev;
 static const char *qtest_log;
 
+
 #ifdef TARGET_CHERI
 #include "target/cheri-common/cheri_defs.h"
 bool cheri_c2e_on_unrepresentable = false;
@@ -3015,6 +3016,9 @@ void qemu_init(int argc, char **argv, char **envp)
             case QEMU_OPTION_DFILTER:
                 qemu_set_dfilter_ranges(optarg, &error_fatal);
                 break;
+            case QEMU_OPTION_simpoints: 
+                qemu_set_simpoints(optarg, &error_fatal);
+                break;
             case QEMU_OPTION_seed:
                 qemu_guest_random_seed_main(optarg, &error_fatal);
                 break;
@@ -3458,6 +3462,10 @@ void qemu_init(int argc, char **argv, char **envp)
                     qemu_log_instr_set_format(QLI_FMT_TEXT);
                 } else if (strcmp(optarg, "cvtrace") == 0) {
                     qemu_log_instr_set_format(QLI_FMT_CVTRACE);
+                } else if (strcmp(optarg, "champsim") == 0) {
+                    qemu_log_instr_set_format(QLI_FMT_CHAMPSIM); 
+                } else if (strcmp(optarg, "champsimcheri") == 0) {
+                    qemu_log_instr_set_format(QLI_FMT_CHAMPSIMCHERI); 
                 } else {
                     printf("Invalid choice for cheri-trace-format: '%s'\n", optarg);
                     exit(1);

@@ -155,12 +155,46 @@ static bool gen_amo(DisasContext *ctx, arg_atomic *a,
 static bool trans_lr_w(DisasContext *ctx, arg_lr_w *a)
 {
     REQUIRE_EXT(ctx, RVA);
+    
+    // Log source: rs1 is GPR (address base)
+    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+    TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
+    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_gpr);
+    tcg_temp_free_i32(rs1);
+    tcg_temp_free_i32(type_gpr);
+    
+    // Log destination: rd is GPR (loaded value)
+    TCGv_i32 rd = tcg_const_i32(a->rd);
+    TCGv_i32 type_gpr_d = tcg_const_i32(LOG_REG_TYPE_GPR);
+    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_gpr_d);
+    tcg_temp_free_i32(rd);
+    tcg_temp_free_i32(type_gpr_d);
+    
     return gen_lr(ctx, a, (MO_ALIGN | MO_TESL));
 }
 
 static bool trans_sc_w(DisasContext *ctx, arg_sc_w *a)
 {
     REQUIRE_EXT(ctx, RVA);
+    
+    // Log source: rs1 is GPR (address base)
+    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+    TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
+    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_gpr);
+    tcg_temp_free_i32(rs1);
+    
+    // Log source: rs2 is GPR (value to store)
+    TCGv_i32 rs2 = tcg_const_i32(a->rs2);
+    gen_helper_qemu_log_reg_src(cpu_env, rs2, type_gpr);
+    tcg_temp_free_i32(rs2);
+    
+    // Log destination: rd is GPR (success/failure)
+    TCGv_i32 rd = tcg_const_i32(a->rd);
+    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_gpr);
+    tcg_temp_free_i32(rd);
+    
+    tcg_temp_free_i32(type_gpr);
+    
     return gen_sc(ctx, a, (MO_ALIGN | MO_TESL));
 }
 
@@ -168,78 +202,294 @@ static bool trans_sc_w(DisasContext *ctx, arg_sc_w *a)
 static bool trans_lr_h(DisasContext *ctx, arg_lr_w *a)
 {
     REQUIRE_EXT(ctx, RVA);
+    
+    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+    TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
+    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_gpr);
+    tcg_temp_free_i32(rs1);
+    tcg_temp_free_i32(type_gpr);
+    
+    TCGv_i32 rd = tcg_const_i32(a->rd);
+    TCGv_i32 type_gpr_d = tcg_const_i32(LOG_REG_TYPE_GPR);
+    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_gpr_d);
+    tcg_temp_free_i32(rd);
+    tcg_temp_free_i32(type_gpr_d);
+    
     return gen_lr(ctx, a, (MO_ALIGN | MO_TESW));
 }
 
 static bool trans_sc_h(DisasContext *ctx, arg_sc_w *a)
 {
     REQUIRE_EXT(ctx, RVA);
+    
+    TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
+    
+    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_gpr);
+    tcg_temp_free_i32(rs1);
+    
+    TCGv_i32 rs2 = tcg_const_i32(a->rs2);
+    gen_helper_qemu_log_reg_src(cpu_env, rs2, type_gpr);
+    tcg_temp_free_i32(rs2);
+    
+    TCGv_i32 rd = tcg_const_i32(a->rd);
+    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_gpr);
+    tcg_temp_free_i32(rd);
+    
+    tcg_temp_free_i32(type_gpr);
+    
     return gen_sc(ctx, a, (MO_ALIGN | MO_TESW));
 }
 
 static bool trans_lr_b(DisasContext *ctx, arg_lr_w *a)
 {
     REQUIRE_EXT(ctx, RVA);
+    
+    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+    TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
+    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_gpr);
+    tcg_temp_free_i32(rs1);
+    tcg_temp_free_i32(type_gpr);
+    
+    TCGv_i32 rd = tcg_const_i32(a->rd);
+    TCGv_i32 type_gpr_d = tcg_const_i32(LOG_REG_TYPE_GPR);
+    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_gpr_d);
+    tcg_temp_free_i32(rd);
+    tcg_temp_free_i32(type_gpr_d);
+    
     return gen_lr(ctx, a, (MO_ALIGN | MO_SB));
 }
 
 static bool trans_sc_b(DisasContext *ctx, arg_sc_w *a)
 {
     REQUIRE_EXT(ctx, RVA);
+    
+    TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
+    
+    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_gpr);
+    tcg_temp_free_i32(rs1);
+    
+    TCGv_i32 rs2 = tcg_const_i32(a->rs2);
+    gen_helper_qemu_log_reg_src(cpu_env, rs2, type_gpr);
+    tcg_temp_free_i32(rs2);
+    
+    TCGv_i32 rd = tcg_const_i32(a->rd);
+    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_gpr);
+    tcg_temp_free_i32(rd);
+    
+    tcg_temp_free_i32(type_gpr);
+    
     return gen_sc(ctx, a, (MO_ALIGN | MO_SB));
 }
 
 static bool trans_amoswap_w(DisasContext *ctx, arg_amoswap_w *a)
 {
     REQUIRE_EXT(ctx, RVA);
+    
+    TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
+    
+    // Log source: rs1 is GPR (address)
+    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_gpr);
+    tcg_temp_free_i32(rs1);
+    
+    // Log source: rs2 is GPR (value to swap)
+    TCGv_i32 rs2 = tcg_const_i32(a->rs2);
+    gen_helper_qemu_log_reg_src(cpu_env, rs2, type_gpr);
+    tcg_temp_free_i32(rs2);
+    
+    // Log destination: rd is GPR (original value)
+    TCGv_i32 rd = tcg_const_i32(a->rd);
+    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_gpr);
+    tcg_temp_free_i32(rd);
+    
+    tcg_temp_free_i32(type_gpr);
+    
     return gen_amo(ctx, a, &tcg_gen_atomic_xchg_tl, (MO_ALIGN | MO_TESL));
 }
 
 static bool trans_amoadd_w(DisasContext *ctx, arg_amoadd_w *a)
 {
     REQUIRE_EXT(ctx, RVA);
+    
+    TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
+    
+    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_gpr);
+    tcg_temp_free_i32(rs1);
+    
+    TCGv_i32 rs2 = tcg_const_i32(a->rs2);
+    gen_helper_qemu_log_reg_src(cpu_env, rs2, type_gpr);
+    tcg_temp_free_i32(rs2);
+    
+    TCGv_i32 rd = tcg_const_i32(a->rd);
+    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_gpr);
+    tcg_temp_free_i32(rd);
+    
+    tcg_temp_free_i32(type_gpr);
+    
     return gen_amo(ctx, a, &tcg_gen_atomic_fetch_add_tl, (MO_ALIGN | MO_TESL));
 }
 
 static bool trans_amoxor_w(DisasContext *ctx, arg_amoxor_w *a)
 {
     REQUIRE_EXT(ctx, RVA);
+    
+    TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
+    
+    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_gpr);
+    tcg_temp_free_i32(rs1);
+    
+    TCGv_i32 rs2 = tcg_const_i32(a->rs2);
+    gen_helper_qemu_log_reg_src(cpu_env, rs2, type_gpr);
+    tcg_temp_free_i32(rs2);
+    
+    TCGv_i32 rd = tcg_const_i32(a->rd);
+    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_gpr);
+    tcg_temp_free_i32(rd);
+    
+    tcg_temp_free_i32(type_gpr);
+    
     return gen_amo(ctx, a, &tcg_gen_atomic_fetch_xor_tl, (MO_ALIGN | MO_TESL));
 }
 
 static bool trans_amoand_w(DisasContext *ctx, arg_amoand_w *a)
 {
     REQUIRE_EXT(ctx, RVA);
+    
+    TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
+    
+    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_gpr);
+    tcg_temp_free_i32(rs1);
+    
+    TCGv_i32 rs2 = tcg_const_i32(a->rs2);
+    gen_helper_qemu_log_reg_src(cpu_env, rs2, type_gpr);
+    tcg_temp_free_i32(rs2);
+    
+    TCGv_i32 rd = tcg_const_i32(a->rd);
+    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_gpr);
+    tcg_temp_free_i32(rd);
+    
+    tcg_temp_free_i32(type_gpr);
+    
     return gen_amo(ctx, a, &tcg_gen_atomic_fetch_and_tl, (MO_ALIGN | MO_TESL));
 }
 
 static bool trans_amoor_w(DisasContext *ctx, arg_amoor_w *a)
 {
     REQUIRE_EXT(ctx, RVA);
+    
+    TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
+    
+    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_gpr);
+    tcg_temp_free_i32(rs1);
+    
+    TCGv_i32 rs2 = tcg_const_i32(a->rs2);
+    gen_helper_qemu_log_reg_src(cpu_env, rs2, type_gpr);
+    tcg_temp_free_i32(rs2);
+    
+    TCGv_i32 rd = tcg_const_i32(a->rd);
+    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_gpr);
+    tcg_temp_free_i32(rd);
+    
+    tcg_temp_free_i32(type_gpr);
+    
     return gen_amo(ctx, a, &tcg_gen_atomic_fetch_or_tl, (MO_ALIGN | MO_TESL));
 }
 
 static bool trans_amomin_w(DisasContext *ctx, arg_amomin_w *a)
 {
     REQUIRE_EXT(ctx, RVA);
+    
+    TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
+    
+    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_gpr);
+    tcg_temp_free_i32(rs1);
+    
+    TCGv_i32 rs2 = tcg_const_i32(a->rs2);
+    gen_helper_qemu_log_reg_src(cpu_env, rs2, type_gpr);
+    tcg_temp_free_i32(rs2);
+    
+    TCGv_i32 rd = tcg_const_i32(a->rd);
+    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_gpr);
+    tcg_temp_free_i32(rd);
+    
+    tcg_temp_free_i32(type_gpr);
+    
     return gen_amo(ctx, a, &tcg_gen_atomic_fetch_smin_tl, (MO_ALIGN | MO_TESL));
 }
 
 static bool trans_amomax_w(DisasContext *ctx, arg_amomax_w *a)
 {
     REQUIRE_EXT(ctx, RVA);
+    
+    TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
+    
+    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_gpr);
+    tcg_temp_free_i32(rs1);
+    
+    TCGv_i32 rs2 = tcg_const_i32(a->rs2);
+    gen_helper_qemu_log_reg_src(cpu_env, rs2, type_gpr);
+    tcg_temp_free_i32(rs2);
+    
+    TCGv_i32 rd = tcg_const_i32(a->rd);
+    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_gpr);
+    tcg_temp_free_i32(rd);
+    
+    tcg_temp_free_i32(type_gpr);
+    
     return gen_amo(ctx, a, &tcg_gen_atomic_fetch_smax_tl, (MO_ALIGN | MO_TESL));
 }
 
 static bool trans_amominu_w(DisasContext *ctx, arg_amominu_w *a)
 {
     REQUIRE_EXT(ctx, RVA);
+    
+    TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
+    
+    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_gpr);
+    tcg_temp_free_i32(rs1);
+    
+    TCGv_i32 rs2 = tcg_const_i32(a->rs2);
+    gen_helper_qemu_log_reg_src(cpu_env, rs2, type_gpr);
+    tcg_temp_free_i32(rs2);
+    
+    TCGv_i32 rd = tcg_const_i32(a->rd);
+    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_gpr);
+    tcg_temp_free_i32(rd);
+    
+    tcg_temp_free_i32(type_gpr);
+    
     return gen_amo(ctx, a, &tcg_gen_atomic_fetch_umin_tl, (MO_ALIGN | MO_TESL));
 }
 
 static bool trans_amomaxu_w(DisasContext *ctx, arg_amomaxu_w *a)
 {
     REQUIRE_EXT(ctx, RVA);
+    
+    TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
+    
+    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_gpr);
+    tcg_temp_free_i32(rs1);
+    
+    TCGv_i32 rs2 = tcg_const_i32(a->rs2);
+    gen_helper_qemu_log_reg_src(cpu_env, rs2, type_gpr);
+    tcg_temp_free_i32(rs2);
+    
+    TCGv_i32 rd = tcg_const_i32(a->rd);
+    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_gpr);
+    tcg_temp_free_i32(rd);
+    
+    tcg_temp_free_i32(type_gpr);
+    
     return gen_amo(ctx, a, &tcg_gen_atomic_fetch_umax_tl, (MO_ALIGN | MO_TESL));
 }
 
@@ -247,56 +497,228 @@ static bool trans_amomaxu_w(DisasContext *ctx, arg_amomaxu_w *a)
 
 static bool trans_lr_d(DisasContext *ctx, arg_lr_d *a)
 {
+    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+    TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
+    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_gpr);
+    tcg_temp_free_i32(rs1);
+    tcg_temp_free_i32(type_gpr);
+    
+    TCGv_i32 rd = tcg_const_i32(a->rd);
+    TCGv_i32 type_gpr_d = tcg_const_i32(LOG_REG_TYPE_GPR);
+    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_gpr_d);
+    tcg_temp_free_i32(rd);
+    tcg_temp_free_i32(type_gpr_d);
+    
     return gen_lr(ctx, a, MO_ALIGN | MO_TEQ);
 }
 
 static bool trans_sc_d(DisasContext *ctx, arg_sc_d *a)
 {
+    TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
+    
+    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_gpr);
+    tcg_temp_free_i32(rs1);
+    
+    TCGv_i32 rs2 = tcg_const_i32(a->rs2);
+    gen_helper_qemu_log_reg_src(cpu_env, rs2, type_gpr);
+    tcg_temp_free_i32(rs2);
+    
+    TCGv_i32 rd = tcg_const_i32(a->rd);
+    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_gpr);
+    tcg_temp_free_i32(rd);
+    
+    tcg_temp_free_i32(type_gpr);
+    
     return gen_sc(ctx, a, (MO_ALIGN | MO_TEQ));
 }
 
 static bool trans_amoswap_d(DisasContext *ctx, arg_amoswap_d *a)
 {
+    TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
+    
+    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_gpr);
+    tcg_temp_free_i32(rs1);
+    
+    TCGv_i32 rs2 = tcg_const_i32(a->rs2);
+    gen_helper_qemu_log_reg_src(cpu_env, rs2, type_gpr);
+    tcg_temp_free_i32(rs2);
+    
+    TCGv_i32 rd = tcg_const_i32(a->rd);
+    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_gpr);
+    tcg_temp_free_i32(rd);
+    
+    tcg_temp_free_i32(type_gpr);
+    
     return gen_amo(ctx, a, &tcg_gen_atomic_xchg_tl, (MO_ALIGN | MO_TEQ));
 }
 
 static bool trans_amoadd_d(DisasContext *ctx, arg_amoadd_d *a)
 {
+    TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
+    
+    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_gpr);
+    tcg_temp_free_i32(rs1);
+    
+    TCGv_i32 rs2 = tcg_const_i32(a->rs2);
+    gen_helper_qemu_log_reg_src(cpu_env, rs2, type_gpr);
+    tcg_temp_free_i32(rs2);
+    
+    TCGv_i32 rd = tcg_const_i32(a->rd);
+    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_gpr);
+    tcg_temp_free_i32(rd);
+    
+    tcg_temp_free_i32(type_gpr);
+    
     return gen_amo(ctx, a, &tcg_gen_atomic_fetch_add_tl, (MO_ALIGN | MO_TEQ));
 }
 
 static bool trans_amoxor_d(DisasContext *ctx, arg_amoxor_d *a)
 {
+    TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
+    
+    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_gpr);
+    tcg_temp_free_i32(rs1);
+    
+    TCGv_i32 rs2 = tcg_const_i32(a->rs2);
+    gen_helper_qemu_log_reg_src(cpu_env, rs2, type_gpr);
+    tcg_temp_free_i32(rs2);
+    
+    TCGv_i32 rd = tcg_const_i32(a->rd);
+    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_gpr);
+    tcg_temp_free_i32(rd);
+    
+    tcg_temp_free_i32(type_gpr);
+    
     return gen_amo(ctx, a, &tcg_gen_atomic_fetch_xor_tl, (MO_ALIGN | MO_TEQ));
 }
 
 static bool trans_amoand_d(DisasContext *ctx, arg_amoand_d *a)
 {
+    TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
+    
+    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_gpr);
+    tcg_temp_free_i32(rs1);
+    
+    TCGv_i32 rs2 = tcg_const_i32(a->rs2);
+    gen_helper_qemu_log_reg_src(cpu_env, rs2, type_gpr);
+    tcg_temp_free_i32(rs2);
+    
+    TCGv_i32 rd = tcg_const_i32(a->rd);
+    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_gpr);
+    tcg_temp_free_i32(rd);
+    
+    tcg_temp_free_i32(type_gpr);
+    
     return gen_amo(ctx, a, &tcg_gen_atomic_fetch_and_tl, (MO_ALIGN | MO_TEQ));
 }
 
 static bool trans_amoor_d(DisasContext *ctx, arg_amoor_d *a)
 {
+    TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
+    
+    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_gpr);
+    tcg_temp_free_i32(rs1);
+    
+    TCGv_i32 rs2 = tcg_const_i32(a->rs2);
+    gen_helper_qemu_log_reg_src(cpu_env, rs2, type_gpr);
+    tcg_temp_free_i32(rs2);
+    
+    TCGv_i32 rd = tcg_const_i32(a->rd);
+    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_gpr);
+    tcg_temp_free_i32(rd);
+    
+    tcg_temp_free_i32(type_gpr);
+    
     return gen_amo(ctx, a, &tcg_gen_atomic_fetch_or_tl, (MO_ALIGN | MO_TEQ));
 }
 
 static bool trans_amomin_d(DisasContext *ctx, arg_amomin_d *a)
 {
+    TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
+    
+    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_gpr);
+    tcg_temp_free_i32(rs1);
+    
+    TCGv_i32 rs2 = tcg_const_i32(a->rs2);
+    gen_helper_qemu_log_reg_src(cpu_env, rs2, type_gpr);
+    tcg_temp_free_i32(rs2);
+    
+    TCGv_i32 rd = tcg_const_i32(a->rd);
+    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_gpr);
+    tcg_temp_free_i32(rd);
+    
+    tcg_temp_free_i32(type_gpr);
+    
     return gen_amo(ctx, a, &tcg_gen_atomic_fetch_smin_tl, (MO_ALIGN | MO_TEQ));
 }
 
 static bool trans_amomax_d(DisasContext *ctx, arg_amomax_d *a)
 {
+    TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
+    
+    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_gpr);
+    tcg_temp_free_i32(rs1);
+    
+    TCGv_i32 rs2 = tcg_const_i32(a->rs2);
+    gen_helper_qemu_log_reg_src(cpu_env, rs2, type_gpr);
+    tcg_temp_free_i32(rs2);
+    
+    TCGv_i32 rd = tcg_const_i32(a->rd);
+    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_gpr);
+    tcg_temp_free_i32(rd);
+    
+    tcg_temp_free_i32(type_gpr);
+    
     return gen_amo(ctx, a, &tcg_gen_atomic_fetch_smax_tl, (MO_ALIGN | MO_TEQ));
 }
 
 static bool trans_amominu_d(DisasContext *ctx, arg_amominu_d *a)
 {
+    TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
+    
+    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_gpr);
+    tcg_temp_free_i32(rs1);
+    
+    TCGv_i32 rs2 = tcg_const_i32(a->rs2);
+    gen_helper_qemu_log_reg_src(cpu_env, rs2, type_gpr);
+    tcg_temp_free_i32(rs2);
+    
+    TCGv_i32 rd = tcg_const_i32(a->rd);
+    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_gpr);
+    tcg_temp_free_i32(rd);
+    
+    tcg_temp_free_i32(type_gpr);
+    
     return gen_amo(ctx, a, &tcg_gen_atomic_fetch_umin_tl, (MO_ALIGN | MO_TEQ));
 }
 
 static bool trans_amomaxu_d(DisasContext *ctx, arg_amomaxu_d *a)
 {
+    TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
+    
+    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_gpr);
+    tcg_temp_free_i32(rs1);
+    
+    TCGv_i32 rs2 = tcg_const_i32(a->rs2);
+    gen_helper_qemu_log_reg_src(cpu_env, rs2, type_gpr);
+    tcg_temp_free_i32(rs2);
+    
+    TCGv_i32 rd = tcg_const_i32(a->rd);
+    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_gpr);
+    tcg_temp_free_i32(rd);
+    
+    tcg_temp_free_i32(type_gpr);
+    
     return gen_amo(ctx, a, &tcg_gen_atomic_fetch_umax_tl, (MO_ALIGN | MO_TEQ));
 }
 #endif

@@ -159,6 +159,12 @@ void CHERI_HELPER_IMPL(ddc_check_bounds(CPUArchState *env, target_ulong addr,
                        "Should have been checked before bounds!");
     check_cap(env, ddc, 0, addr, CHERI_EXC_REGNUM_DDC, num_bytes,
               /*instavail=*/true, GETPC());
+
+#if defined(CONFIG_TCG_LOG_INSTR)
+    if (qemu_log_instr_enabled(env)) {
+        qemu_log_instr_mem_auth_cap(env, ddc, CHERI_EXC_REGNUM_DDC);
+    }
+#endif
 }
 
 #ifdef TARGET_AARCH64
@@ -1246,6 +1252,12 @@ static inline QEMU_ALWAYS_INLINE target_ulong cap_check_common(
     tcg_abort();
 #endif
     const cap_register_t *cbp = get_load_store_base_cap(env, cb);
+
+#if defined(CONFIG_TCG_LOG_INSTR)
+    if (qemu_log_instr_enabled(env)) {
+        qemu_log_instr_mem_auth_cap(env, cbp, cb);
+    }
+#endif
     return cap_check_common_reg(required_perms, env, cb,
                                 cap_get_cursor(cbp) + offset, size,
                                 _host_return_address, cbp, size,

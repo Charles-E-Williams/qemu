@@ -46,6 +46,7 @@
 #include "exec/translator.h"
 #include "tcg/tcg.h"
 #include "tcg/tcg-op.h"
+#include "qapi/error.h"
 
 /*
  * CHERI common instruction logging.
@@ -79,7 +80,7 @@
 
 #ifdef CONFIG_TCG_LOG_INSTR
 
-// #define CONFIG_DEBUG_TCG
+#define CONFIG_DEBUG_TCG
 
 #ifdef CONFIG_DEBUG_TCG
 #define log_assert(x) assert((x))
@@ -95,6 +96,14 @@
  * -dfilter ranges in common logging implementation.
  */
 extern GArray *debug_regions;
+extern GArray *simpoints;
+extern GArray *adjusted_simpoints;
+extern GArray *warmup_duration;
+extern GArray *simpoint_pcs;       
+extern uint64_t INTERVAL_SIZE;
+extern uint64_t WARMUP_INTERVAL;
+extern uint64_t START_PC; 
+static GHashTable *pc_exec_count_map = NULL;
 
 /*
  * Instruction log info associated with each committed log entry.
@@ -111,7 +120,8 @@ typedef struct cpu_log_instr_info {
 #define LI_FLAG_INTR_MASK 0x3
 /* Entry contains a CPU mode-switch and associated code */
 #define LI_FLAG_MODE_SWITCH (1 << 2)
-
+#define NUM_INSTR_DESTINATIONS 2
+#define NUM_INSTR_SOURCES 4
     qemu_log_instr_cpu_mode_t next_cpu_mode;
     uint32_t intr_code;
     target_ulong intr_vector;
@@ -120,7 +130,24 @@ typedef struct cpu_log_instr_info {
     target_ulong pc;
     /* Generic instruction opcode buffer */
     int insn_size;
+
+    /*ChampSim Trace*/
+    uint8_t is_branch;
+    uint8_t branch_taken;
+    qemu_log_branch_type_t branch_type; 
+
+    qemu_log_reg_info src_regs[NUM_INSTR_SOURCES];
+    qemu_log_reg_info dst_regs[NUM_INSTR_DESTINATIONS];
+    int num_src_regs;
+    int num_dst_regs;
+
     char insn_bytes[TARGET_MAX_INSN_SIZE];
+#ifdef TARGET_CHERI
+    /* Authorizing capability for memory accesses */
+    bool has_auth_cap;
+    cap_register_t auth_cap;
+    uint32_t auth_cap_regnum;  /* register number (or CHERI_EXC_REGNUM_DDC) */
+#endif
 #define cpu_log_iinfo_endzero mem
     /*
      * For now we allow multiple accesses to be tied to one instruction.
@@ -178,6 +205,9 @@ typedef struct {
     };
 } log_meminfo_t;
 
+#define meminfo_is_cap(mi) (mi->flags & LMI_CAP)
+
+
 /*
  * Callbacks defined by a trace format implementation.
  * These are called to covert instruction tracing events to the corresponding
@@ -217,9 +247,9 @@ typedef struct {
 #define CTE_CAP     11  /* Cap change (val2,val3,val4,val5) */
 #define CTE_LD_CAP  12  /* Load Cap (val2,val3,val4,val5) from addr (val1) */
 #define CTE_ST_CAP  13  /* Store Cap (val2,val3,val4,val5) to addr (val1) */
-    uint8_t exception;  /* 0=none, 1=TLB Mod, 2=TLB Load, 3=TLB Store, etc. */
+    // uint8_t exception;  /* 0=none, 1=TLB Mod, 2=TLB Load, 3=TLB Store, etc. */
 #define CTE_EXCEPTION_NONE 31
-    uint16_t cycles;    /* Currently not used. */
+    // uint16_t cycles;    /* Currently not used. */
     uint32_t inst;      /* Encoded instruction. */
     uint64_t pc;        /* PC value of instruction. */
     uint64_t val1;      /* val1 is used for memory address. */
@@ -227,9 +257,58 @@ typedef struct {
     uint64_t val3;
     uint64_t val4;
     uint64_t val5;
-    uint8_t thread;     /* Hardware thread/CPU (i.e. cpu->cpu_index ) */
-    uint8_t asid;       /* Address Space ID */
+    // uint8_t thread;     /* Hardware thread/CPU (i.e. cpu->cpu_index ) */
+    // uint8_t asid;       /* Address Space ID */
 } __attribute__((packed)) cheri_trace_entry_t;
+
+
+typedef struct {
+#define REG_STACK_POINTER 6
+#define REG_FLAGS  25
+#define REG_INSTRUCTION_POINTER 26
+#define REG_RETURN 1
+#define NUM_INSTR_DESTINATIONS 2
+#define NUM_INSTR_SOURCES 4
+    // instruction pointer or PC (Program Counter)
+  uint64_t ip;
+
+  // branch info
+  uint8_t is_branch;
+  uint8_t branch_taken;
+
+  uint8_t destination_registers[NUM_INSTR_DESTINATIONS]; // output registers
+  uint8_t source_registers[NUM_INSTR_SOURCES];           // input registers
+
+  uint64_t destination_memory[NUM_INSTR_DESTINATIONS]; // output memory
+  uint64_t source_memory[NUM_INSTR_SOURCES];           // input memory
+} champsim_trace_entry_t;
+
+typedef struct {
+#define REG_STACK_POINTER 6
+#define REG_FLAGS  25
+#define REG_INSTRUCTION_POINTER 26
+#define REG_RETURN 1
+#define NUM_INSTR_DESTINATIONS 2
+#define NUM_INSTR_SOURCES 4
+    // instruction pointer or PC (Program Counter)
+  uint64_t ip;
+
+  // branch info
+  uint8_t is_branch;
+  uint8_t branch_taken;
+
+  uint8_t destination_registers[NUM_INSTR_DESTINATIONS]; // output registers
+  uint8_t source_registers[NUM_INSTR_SOURCES];           // input registers
+
+  uint64_t destination_memory[NUM_INSTR_DESTINATIONS]; // output memory
+  uint64_t source_memory[NUM_INSTR_SOURCES];           // input memory
+
+  uint64_t base, length,offset;
+  uint32_t permissions;
+  uint8_t tag;
+  uint8_t is_cap_instr;
+} champsim_cheri_trace_entry_t;
+
 
 /* Version 3 Cheri Stream Trace header info */
 #define CTE_QEMU_VERSION    (0x80U + 3)
@@ -261,9 +340,11 @@ static inline cpu_log_instr_info_t *get_cpu_log_instr_info(CPUArchState *env)
 
 /* Text trace format emitters */
 
+
 /*
  * Emit textual trace representation of memory access
  */
+
 static inline void emit_text_ldst(log_meminfo_t *minfo, const char *direction)
 {
 
@@ -276,7 +357,7 @@ static inline void emit_text_ldst(log_meminfo_t *minfo, const char *direction)
                  TARGET_FMT_lx " Cursor:" TARGET_FMT_lx "\n",
                  direction, minfo->addr, minfo->cap.cr_tag,
                  CAP_cc(compress_mem)(&minfo->cap),
-                 cap_get_cursor(&minfo->cap));
+                 cap_get_cursor(&minfo->cap));        
     } else
 #endif
     {
@@ -315,8 +396,8 @@ static inline void emit_text_reg(log_reginfo_t *rinfo)
 #else
     if (reginfo_is_cap(rinfo)) {
         if (reginfo_has_cap(rinfo))
-            qemu_log("    Write %s|" PRINT_CAP_FMTSTR_L1 "\n"
-                     "             |" PRINT_CAP_FMTSTR_L2 "\n",
+            qemu_log("    Write %s|" PRINT_CAP_FMTSTR_L1 ""
+                     " |" PRINT_CAP_FMTSTR_L2 "\n",
                      rinfo->name,
                      PRINT_CAP_ARGS_L1(&rinfo->cap),
                      PRINT_CAP_ARGS_L2(&rinfo->cap));
@@ -331,6 +412,7 @@ static inline void emit_text_reg(log_reginfo_t *rinfo)
     }
 }
 
+
 /*
  * Emit textual trace entry to the log.
  */
@@ -338,6 +420,7 @@ static void emit_text_entry(CPUArchState *env, cpu_log_instr_info_t *iinfo)
 {
     QemuLogFile *logfile;
     int i;
+
 
     /* Dump CPU-ID:ASID + address */
     qemu_log("[%d:%d] ", env_cpu(env)->cpu_index, iinfo->asid);
@@ -353,6 +436,7 @@ static void emit_text_entry(CPUArchState *env, cpu_log_instr_info_t *iinfo)
                          sizeof(iinfo->insn_bytes), iinfo->pc, 1);
     }
     rcu_read_unlock();
+
 
     /*
      * TODO(am2419): what to do with injected instructions?
@@ -381,7 +465,9 @@ static void emit_text_entry(CPUArchState *env, cpu_log_instr_info_t *iinfo)
     /* Dump memory access */
     for (i = 0; i < iinfo->mem->len; i++) {
         log_meminfo_t *minfo = &g_array_index(iinfo->mem, log_meminfo_t, i);
+
         if (minfo->flags & LMI_LD) {
+
             emit_text_ldst(minfo, "Read");
         } else if (minfo->flags & LMI_ST) {
             emit_text_ldst(minfo, "Write");
@@ -394,9 +480,22 @@ static void emit_text_entry(CPUArchState *env, cpu_log_instr_info_t *iinfo)
         emit_text_reg(rinfo);
     }
 
+#ifdef TARGET_CHERI
+    if (iinfo->has_auth_cap) {
+        const cap_register_t *ac = &iinfo->auth_cap;
+        qemu_log("    Auth Cap [%s%u] v:%d PESBT:" TARGET_FMT_lx
+                 " Cursor:" TARGET_FMT_lx "\n",
+                 iinfo->auth_cap_regnum == CHERI_EXC_REGNUM_DDC ? "DDC" : "c",
+                 iinfo->auth_cap_regnum,
+                 ac->cr_tag,
+                 CAP_cc(compress_mem)(ac),
+                 cap_get_cursor(ac));
+    }
+#endif
     /* Dump extra logged messages, if any */
     if (iinfo->txt_buffer->len > 0)
         qemu_log("%s", iinfo->txt_buffer->str);
+
 }
 
 /*
@@ -457,27 +556,28 @@ static void emit_cvtrace_entry(CPUArchState *env, cpu_log_instr_info_t *iinfo)
 {
     FILE *logfile;
     cheri_trace_entry_t entry;
-    static uint16_t cycles = 0; // TODO(am2419): this should be a per-cpu counter.
+    //static uint16_t cycles = 0; // TODO(am2419): this should be a per-cpu counter.
     uint32_t *insn = (uint32_t *)&iinfo->insn_bytes[0];
 
     entry.entry_type = CTE_NO_REG;
-    entry.thread = (uint8_t)env_cpu(env)->cpu_index;
-    entry.asid = (uint8_t)iinfo->asid;
+    //entry.thread = (uint8_t)env_cpu(env)->cpu_index;
+    //entry.asid = (uint8_t)iinfo->asid;
     entry.pc = cpu_to_be64(iinfo->pc);
-    entry.cycles = cpu_to_be16(cycles++);
+    //entry.cycles = cpu_to_be16(cycles++);
+    entry.inst = cpu_to_be32(*insn);
+
     /*
      * TODO(am2419): The instruction bytes are alread in target byte-order, however
      * cheritrace does not currently expect this.
      */
-    entry.inst = cpu_to_be32(*insn);
-    switch (iinfo->flags & LI_FLAG_INTR_MASK) {
-    case LI_FLAG_INTR_TRAP:
-        entry.exception = (uint8_t)(iinfo->intr_code & 0xff);
-    case LI_FLAG_INTR_ASYNC:
-        entry.exception = 0;
-    default:
-        entry.exception = CTE_EXCEPTION_NONE;
-    }
+    // switch (iinfo->flags & LI_FLAG_INTR_MASK) {
+    // case LI_FLAG_INTR_TRAP:
+    //     entry.exception = (uint8_t)(iinfo->intr_code & 0xff);
+    // case LI_FLAG_INTR_ASYNC:
+    //     entry.exception = 0;
+    // default:
+    //     entry.exception = CTE_EXCEPTION_NONE;
+    // }
 
     if (iinfo->regs->len) {
         log_reginfo_t *rinfo = &g_array_index(iinfo->regs, log_reginfo_t, 0);
@@ -493,6 +593,7 @@ static void emit_cvtrace_entry(CPUArchState *env, cpu_log_instr_info_t *iinfo)
                 // cvtrace expects a null capability in the integer case
                 cr = null_capability(&intcap);
             }
+
             uint64_t metadata = (((uint64_t)cr->cr_tag << 63) |
                                  ((uint64_t)cap_get_otype_signext(cr) << 32) |
                                  ((uint64_t)COMBINED_PERMS_VALUE(cr) << 1) |
@@ -514,21 +615,34 @@ static void emit_cvtrace_entry(CPUArchState *env, cpu_log_instr_info_t *iinfo)
     if (iinfo->mem->len) {
         log_meminfo_t *minfo = &g_array_index(iinfo->mem, log_meminfo_t, 0);
 #ifndef TARGET_CHERI
-        log_assert((minfo->flags & LMI_CAP) == 0 && "Capability memory access "
+        log_assert(!meminfo_is_cap(minfo) && "Capability memory access "
                    "without CHERI support");
+#else        
+        if (meminfo_is_cap(minfo)) {     
+      
+            if (minfo->flags & LMI_LD) {
+                entry.entry_type = CTE_LD_CAP;
+            } else if (minfo->flags & LMI_ST) {
+                entry.entry_type = CTE_ST_CAP;
+            }
+        } else
 #endif
+        {
+            if (minfo->flags & LMI_LD) {
+                entry.entry_type = CTE_LD_GPR;
+            } else if (minfo->flags & LMI_ST) {
+                entry.entry_type = CTE_ST_GPR;   
+            }
+        }
         entry.val1 = cpu_to_be64(minfo->addr);
-        // Hack to avoid checking for GPR or CAP
-        if (minfo->flags & LMI_LD)
-            entry.entry_type += 1;
-        else if (minfo->flags & LMI_ST)
-            entry.entry_type += 2;
     }
 
     logfile = qemu_log_lock();
     fwrite(&entry, sizeof(entry), 1, logfile);
     qemu_log_unlock(logfile);
 }
+
+
 
 static void emit_cvtrace_start(CPUArchState *env, target_ulong pc)
 {
@@ -539,6 +653,417 @@ static void emit_cvtrace_stop(CPUArchState *env, target_ulong pc)
 {
     // TODO(am2419) Emit an event for instruction logging stop
 }
+
+static uint8_t remap_regid(uint8_t reg, LogRegType type)
+{
+    const uint8_t CHAMPSIM_FP_REG_BASE = 32;
+    const uint8_t TRANSLATED_REG_IP    = 66;
+    const uint8_t TRANSLATED_REG_SP    = 67;
+    const uint8_t TRANSLATED_REG_FLAGS = 68;
+    const uint8_t TRANSLATED_X0 = 69;
+
+    switch (type) {
+        case LOG_REG_TYPE_GPR:
+        case LOG_REG_TYPE_CAP:
+            switch (reg) {
+            case 0: return TRANSLATED_X0;  // c0 and X0
+            case 2: return REG_STACK_POINTER;  // x2/sp
+            case REG_STACK_POINTER: return TRANSLATED_REG_SP;
+            case REG_FLAGS: return TRANSLATED_REG_FLAGS;
+            case REG_INSTRUCTION_POINTER: return TRANSLATED_REG_IP;
+            default: return reg;
+            }
+
+        case LOG_REG_TYPE_FPR:
+            return reg + CHAMPSIM_FP_REG_BASE;
+
+        case LOG_REG_TYPE_NONE:
+        default: 
+            return reg;
+    }
+}
+
+static void emit_champsim_entry(CPUArchState *env, cpu_log_instr_info_t *iinfo)
+{
+    FILE *logfile;
+    champsim_trace_entry_t trace = {0};
+    trace.ip = iinfo->pc;
+    trace.is_branch = iinfo->is_branch;
+    trace.branch_taken = iinfo->branch_taken;
+
+    uint32_t source_mem_idx = 0;
+    uint32_t dest_mem_idx = 0;
+    const uint64_t CACHE_LINE_SIZE = 64;
+    const uint64_t CACHE_LINE_MASK = CACHE_LINE_SIZE - 1;
+
+    for (int i = 0; i < iinfo->mem->len; i++) {
+        log_meminfo_t *minfo = &g_array_index(iinfo->mem, log_meminfo_t, i);
+
+        uint64_t address = minfo->addr;
+        uint8_t access_size = memop_size(minfo->op);
+
+        //checks if the address spans multiple cache lines
+        uint64_t cacheline_access_ini = address & ~CACHE_LINE_MASK;
+        uint64_t cacheline_access_end = (address + access_size - 1) & ~CACHE_LINE_MASK;
+        bool spans_two_cachelines = (cacheline_access_ini != cacheline_access_end);
+
+        if (minfo->flags & LMI_LD) {
+            if (source_mem_idx < NUM_INSTR_SOURCES) {
+                trace.source_memory[source_mem_idx] = address;
+                source_mem_idx++; 
+            } 
+            if (spans_two_cachelines) {
+                if (source_mem_idx < NUM_INSTR_SOURCES) {
+                    trace.source_memory[source_mem_idx] = cacheline_access_end;
+                    source_mem_idx++;
+                }
+            }
+
+        } else if (minfo->flags & LMI_ST) {
+            if (dest_mem_idx < NUM_INSTR_DESTINATIONS) {
+                trace.destination_memory[dest_mem_idx] = address;
+                dest_mem_idx++;
+            }
+            if (spans_two_cachelines) {
+                if (dest_mem_idx < NUM_INSTR_DESTINATIONS) {
+                    trace.destination_memory[dest_mem_idx] = cacheline_access_end;
+                    dest_mem_idx++;
+                }
+            }
+        }
+    }
+    
+    if (iinfo->is_branch) {
+        switch (iinfo->branch_type) {
+            case BRANCH_DIRECT_JUMP: // writes IP only
+                trace.destination_registers[0] = REG_INSTRUCTION_POINTER;
+                break;
+
+            case BRANCH_INDIRECT: // writes IP and reads other
+                trace.destination_registers[0] = REG_INSTRUCTION_POINTER;
+                trace.source_registers[0]      = remap_regid(iinfo->src_regs[0].reg_id, LOG_REG_TYPE_GPR);
+                break;
+
+            case BRANCH_CONDITIONAL: // writes IP, reads IP and reads other
+                trace.destination_registers[0] = REG_INSTRUCTION_POINTER;
+                trace.source_registers[0]      = REG_INSTRUCTION_POINTER;
+                trace.source_registers[1]      = remap_regid(iinfo->src_regs[0].reg_id, LOG_REG_TYPE_GPR);
+                trace.source_registers[2]      = remap_regid(iinfo->src_regs[1].reg_id, LOG_REG_TYPE_GPR);
+                break;
+
+            case BRANCH_DIRECT_CALL: 
+                trace.destination_registers[0] = REG_INSTRUCTION_POINTER;
+                trace.destination_registers[1] = remap_regid(iinfo->dst_regs[0].reg_id, LOG_REG_TYPE_GPR);
+                trace.source_registers[0]      = REG_INSTRUCTION_POINTER;
+                break;
+            
+            case BRANCH_INDIRECT_CALL: 
+                trace.destination_registers[0] = REG_INSTRUCTION_POINTER;
+                trace.destination_registers[1] = remap_regid(iinfo->dst_regs[0].reg_id, LOG_REG_TYPE_GPR);
+                trace.source_registers[0]      = REG_INSTRUCTION_POINTER;
+                trace.source_registers[1]      = remap_regid(iinfo->src_regs[0].reg_id, LOG_REG_TYPE_GPR);
+                break;
+
+            case BRANCH_RETURN: // reads other, writes SP, writes IP, reads SP
+                trace.destination_registers[0] = REG_INSTRUCTION_POINTER;
+                trace.source_registers[0]      = REG_RETURN;
+                trace.source_registers[1]      = REG_INSTRUCTION_POINTER; 
+                break;
+
+            case BRANCH_OTHER:
+                break;
+
+            case NOT_BRANCH:
+            default:
+                assert(false && "Error: Unrecognized branch type\n");
+        }
+
+        logfile = qemu_log_lock();
+        fwrite(&trace, sizeof(trace), 1, logfile);
+        qemu_log_unlock(logfile);
+        // qemu_log("IP: 0x%016" PRIx64 " | BRANCH | TAKEN: %d\n"
+        //             "  REG SRC: [%2d, %2d, %2d, %2d] | REG DST: [%2d, %2d]\n",
+        //             trace.ip,
+        //             trace.branch_taken,
+        //             trace.source_registers[0], trace.source_registers[1], trace.source_registers[2], trace.source_registers[3],
+        //             trace.destination_registers[0], trace.destination_registers[1]);
+        // qemu_log("BRANCH TYPE | %d\n", iinfo->branch_type);
+        return;
+    }
+
+    uint8_t num_src = MIN(iinfo->num_src_regs, NUM_INSTR_SOURCES);
+    for (int i = 0; i < num_src; i++) {
+        trace.source_registers[i] = remap_regid(iinfo->src_regs[i].reg_id, iinfo->src_regs[i].type);
+    }
+
+    uint8_t num_dst = MIN(iinfo->num_dst_regs, NUM_INSTR_DESTINATIONS);
+    for (int i = 0; i < num_dst; i++) {
+        trace.destination_registers[i] = remap_regid(iinfo->dst_regs[i].reg_id, iinfo->dst_regs[i].type);
+    }
+
+
+
+    logfile = qemu_log_lock();
+    fwrite(&trace, sizeof(trace), 1, logfile);
+    qemu_log_unlock(logfile);
+
+            // qemu_log("IP: 0x%016" PRIx64 " |\n"
+            //         "  REG SRC: [%2d, %2d, %2d, %2d] | REG DST: [%2d, %2d]\n"
+            //         "  MEM SRC: [0x%016" PRIx64 ", 0x%016" PRIx64 ", 0x%016" PRIx64 ", 0x%016" PRIx64 "] | MEM DST: [0x%016" PRIx64 ", 0x%016" PRIx64 "]\n",
+            //         trace.ip,
+            //         trace.source_registers[0], trace.source_registers[1], trace.source_registers[2], trace.source_registers[3],
+            //         trace.destination_registers[0], trace.destination_registers[1],
+            //         trace.source_memory[0], trace.source_memory[1], trace.source_memory[2], trace.source_memory[3],
+            //         trace.destination_memory[0], trace.destination_memory[1]);
+}
+
+static void emit_champsim_start(CPUArchState *env, target_ulong pc)
+{
+    // TODO(am2419) Emit an event for instruction logging start
+}
+
+static void emit_champsim_stop(CPUArchState *env, target_ulong pc)
+{
+    // TODO(am2419) Emit an event for instruction logging stop
+}
+
+static void emit_champsim_cheri_entry(CPUArchState *env, cpu_log_instr_info_t *iinfo)
+{
+    FILE *logfile;
+    champsim_cheri_trace_entry_t trace = {0};
+    trace.ip = iinfo->pc;
+    trace.is_branch = iinfo->is_branch;
+    trace.branch_taken = iinfo->branch_taken;
+    trace.is_cap_instr = 0;
+    
+#ifdef TARGET_CHERI
+    cap_register_t* cr = NULL;
+    // check memory operations for capability loads/stores 
+    if (iinfo->mem->len > 0) {
+        for (int i = 0; i < iinfo->mem->len; i++) {
+            log_meminfo_t *minfo = &g_array_index(iinfo->mem, log_meminfo_t, i);
+            if (meminfo_is_cap(minfo)) {
+                cr = &minfo->cap;
+                trace.is_cap_instr = 1;
+                break;
+            }
+        }
+    }
+    // Check register operations for capability manipulation
+    if (cr == NULL && iinfo->regs->len > 0) {
+        for (int i = 0; i < iinfo->regs->len; i++) {
+            log_reginfo_t *rinfo = &g_array_index(iinfo->regs, log_reginfo_t, i);
+            if (reginfo_is_cap(rinfo) && reginfo_has_cap(rinfo)) {
+                cr = &rinfo->cap;
+                trace.is_cap_instr = 1;
+                break;
+            }
+        }
+    }
+    if (cr != NULL) {
+        trace.tag = cr->cr_tag;
+        trace.base = cap_get_base(cr);
+        trace.length = cap_get_length_sat(cr);
+        trace.offset = cap_get_offset(cr);
+        trace.permissions = COMBINED_PERMS_VALUE(cr);
+    } else if (iinfo->has_auth_cap) {
+        // Regular load/store authorized by a capability (DDC or capmode register)
+        const cap_register_t *ac = &iinfo->auth_cap;
+        trace.tag = ac->cr_tag;
+        trace.base = cap_get_base(ac);
+        trace.offset = cap_get_offset(ac);
+        trace.length = cap_get_length_sat(ac);
+        trace.permissions = (uint32_t)cap_get_perms(ac);
+    }
+#endif
+ 
+    uint32_t source_mem_idx = 0;
+    uint32_t dest_mem_idx = 0;
+    const uint64_t CACHE_LINE_SIZE = 64;
+    const uint64_t CACHE_LINE_MASK = CACHE_LINE_SIZE - 1;
+
+    for (int i = 0; i < iinfo->mem->len; i++) {
+        log_meminfo_t *minfo = &g_array_index(iinfo->mem, log_meminfo_t, i);
+
+        uint64_t address = minfo->addr;
+        uint8_t access_size = memop_size(minfo->op);
+
+        //checks if the address spans multiple cache lines
+        uint64_t cacheline_access_ini = address & ~CACHE_LINE_MASK;
+        uint64_t cacheline_access_end = (address + access_size - 1) & ~CACHE_LINE_MASK;
+        bool spans_two_cachelines = (cacheline_access_ini != cacheline_access_end);
+
+        if (minfo->flags & LMI_LD) {
+            if (source_mem_idx < NUM_INSTR_SOURCES) {
+                trace.source_memory[source_mem_idx] = address;
+                source_mem_idx++; 
+            } 
+            if (spans_two_cachelines) {
+                if (source_mem_idx < NUM_INSTR_SOURCES) {
+                    trace.source_memory[source_mem_idx] = cacheline_access_end;
+                    source_mem_idx++;
+                }
+            }
+
+        } else if (minfo->flags & LMI_ST) {
+            if (dest_mem_idx < NUM_INSTR_DESTINATIONS) {
+                trace.destination_memory[dest_mem_idx] = address;
+                dest_mem_idx++;
+            }
+            if (spans_two_cachelines) {
+                if (dest_mem_idx < NUM_INSTR_DESTINATIONS) {
+                    trace.destination_memory[dest_mem_idx] = cacheline_access_end;
+                    dest_mem_idx++;
+                }
+            }
+        }
+    }
+
+    if (iinfo->is_branch) {
+        switch (iinfo->branch_type) {
+            case BRANCH_DIRECT_JUMP: // writes IP only
+                trace.destination_registers[0] = REG_INSTRUCTION_POINTER;
+                break;
+
+            case BRANCH_INDIRECT: // writes IP and reads other
+                trace.destination_registers[0] = REG_INSTRUCTION_POINTER;
+                trace.source_registers[0]      = remap_regid(iinfo->src_regs[0].reg_id, LOG_REG_TYPE_GPR);
+                break;
+
+            case BRANCH_CONDITIONAL: // writes IP, reads IP and reads other
+                trace.destination_registers[0] = REG_INSTRUCTION_POINTER;
+                trace.source_registers[0]      = REG_INSTRUCTION_POINTER;
+                trace.source_registers[1]      = remap_regid(iinfo->src_regs[0].reg_id, LOG_REG_TYPE_GPR);
+                trace.source_registers[2]      = remap_regid(iinfo->src_regs[1].reg_id, LOG_REG_TYPE_GPR);
+                break;
+
+            case BRANCH_DIRECT_CALL: 
+                trace.destination_registers[0] = REG_INSTRUCTION_POINTER;
+                trace.destination_registers[1] = remap_regid(iinfo->dst_regs[0].reg_id, LOG_REG_TYPE_GPR);
+                trace.source_registers[0]      = REG_INSTRUCTION_POINTER;
+                break;
+
+            
+            case BRANCH_INDIRECT_CALL: 
+                trace.destination_registers[0] = REG_INSTRUCTION_POINTER;
+                trace.destination_registers[1] = remap_regid(iinfo->dst_regs[0].reg_id, LOG_REG_TYPE_GPR);
+                trace.source_registers[0]      = REG_INSTRUCTION_POINTER;
+                trace.source_registers[1]      = remap_regid(iinfo->src_regs[0].reg_id, LOG_REG_TYPE_GPR);
+                break;
+
+            case BRANCH_RETURN: // reads other, writes SP, writes IP, reads SP
+                trace.destination_registers[0] = REG_INSTRUCTION_POINTER;
+                trace.source_registers[0]      = REG_RETURN;
+                trace.source_registers[1]      = REG_INSTRUCTION_POINTER; 
+                break;
+
+            case BRANCH_CJAL: 
+                trace.is_cap_instr =  1;
+                trace.destination_registers[0] = REG_INSTRUCTION_POINTER;
+                trace.destination_registers[1] = remap_regid(iinfo->dst_regs[0].reg_id, LOG_REG_TYPE_CAP);
+                trace.source_registers[0]      = REG_INSTRUCTION_POINTER;
+                break;
+            
+            case BRANCH_CJALR: 
+                trace.is_cap_instr = 1;
+                trace.destination_registers[0] = REG_INSTRUCTION_POINTER;
+                trace.destination_registers[1] = remap_regid(iinfo->dst_regs[0].reg_id, LOG_REG_TYPE_CAP);
+                trace.source_registers[0]      = REG_INSTRUCTION_POINTER;
+                trace.source_registers[1]      = remap_regid(iinfo->src_regs[0].reg_id, LOG_REG_TYPE_CAP);
+                break;
+            
+            case BRANCH_OTHER:
+            case NOT_BRANCH:
+            default: 
+                assert(false && "Error: Unrecognized branch type\n");
+        }
+
+        logfile = qemu_log_lock();
+        fwrite(&trace, sizeof(trace), 1, logfile);
+        qemu_log_unlock(logfile);
+        // qemu_log(
+        //     "IP=%016" PRIx64
+        //     " | BR=%u TAKEN=%u\n"
+        //     "  src_regs=[%u,%u,%u,%u]\n"
+        //     "  dst_regs=[%u,%u]\n"
+        //     "  source_memory=[%016" PRIx64 ",%016" PRIx64 ",%016" PRIx64 ",%016" PRIx64 "]\n"
+        //     "  destination_memory=[%016" PRIx64 ",%016" PRIx64 "]\n"
+        //     "  CAP_META: BASE=%016" PRIx64 " LEN=%016" PRIx64 " OFF=%016" PRIx64 "\n"
+        //     "            PERMS=0x%04x TAG=%u IS_CAP=%u\n",
+        //     trace.ip,
+        //     trace.is_branch,
+        //     trace.branch_taken,
+
+        //     trace.source_registers[0], trace.source_registers[1],
+        //     trace.source_registers[2], trace.source_registers[3],
+
+        //     trace.destination_registers[0], trace.destination_registers[1],
+
+        //     trace.source_memory[0], trace.source_memory[1], trace.source_memory[2], trace.source_memory[3],
+        //     trace.destination_memory[0], trace.destination_memory[1],
+
+        //     trace.base, trace.length, trace.offset,
+        //     trace.permissions, trace.tag, trace.is_cap_instr
+        // );
+        // qemu_log("BRANCH TYPE |%d\n", iinfo->branch_type);
+
+        return;
+    }
+
+    uint8_t num_src = MIN(iinfo->num_src_regs, NUM_INSTR_SOURCES);
+    for (int i = 0; i < num_src; i++) {
+        trace.source_registers[i] = remap_regid(iinfo->src_regs[i].reg_id, iinfo->src_regs[i].type);
+    }
+
+    uint8_t num_dst = MIN(iinfo->num_dst_regs, NUM_INSTR_DESTINATIONS);
+    for (int i = 0; i < num_dst; i++) {
+        trace.destination_registers[i] = remap_regid(iinfo->dst_regs[i].reg_id, iinfo->dst_regs[i].type);
+    }
+
+    logfile = qemu_log_lock();
+    fwrite(&trace, sizeof(trace), 1, logfile);
+    qemu_log_unlock(logfile);
+
+    // qemu_log(
+    //         "IP=%016" PRIx64
+    //         " | BR=%u TAKEN=%u\n"
+    //         "  src_regs=[%u,%u,%u,%u]\n"
+    //         "  dst_regs=[%u,%u]\n"
+    //         "  source_memory=[%016" PRIx64 ",%016" PRIx64 ",%016" PRIx64 ",%016" PRIx64 "]\n"
+    //         "  destination_memory=[%016" PRIx64 ",%016" PRIx64 "]\n"
+    //         "  CAP_META: BASE=%016" PRIx64 " LEN=%016" PRIx64 " OFF=%016" PRIx64 "\n"
+    //         "            PERMS=0x%04x TAG=%u IS_CAP=%u\n",
+    //         trace.ip,
+    //         trace.is_branch,
+    //         trace.branch_taken,
+
+    //         trace.source_registers[0], trace.source_registers[1],
+    //         trace.source_registers[2], trace.source_registers[3],
+
+    //         trace.destination_registers[0], trace.destination_registers[1],
+
+    //         trace.source_memory[0], trace.source_memory[1], trace.source_memory[2], trace.source_memory[3],
+    //         trace.destination_memory[0], trace.destination_memory[1],
+
+    //         trace.base, trace.length, trace.offset,
+    //         trace.permissions, trace.tag, trace.is_cap_instr
+    // );
+}
+
+static void emit_champsim_cheri_start(CPUArchState *env, target_ulong pc)
+{
+    // TODO(am2419) Emit an event for instruction logging start
+}
+
+static void emit_champsim_cheri_stop(CPUArchState *env, target_ulong pc)
+{
+    // TODO(am2419) Emit an event for instruction logging stop
+}
+
+
+
+
+
 
 /* Core instruction logging implementation */
 
@@ -582,14 +1107,101 @@ static void reset_log_buffer(cpu_log_instr_state_t *cpulog,
     cpulog->starting = false;
 }
 
+#ifdef TARGET_CHERI
+/* Hash table to track most recent capability store per address */
+static GHashTable *cap_store_tracker = NULL;
+
+typedef struct {
+    uint64_t addr;
+    cpu_log_instr_info_t *iinfo;  // Store full instruction info
+} cap_store_entry_t;
+
+static void free_cap_store_entry(gpointer data) {
+    cap_store_entry_t *entry = (cap_store_entry_t *)data;
+    if (entry->iinfo) {
+        if (entry->iinfo->mem) g_array_free(entry->iinfo->mem, TRUE);
+        if (entry->iinfo->regs) g_array_free(entry->iinfo->regs, TRUE);
+        g_free(entry->iinfo);
+    }
+    g_free(entry);
+}
+
+static void track_cap_store(CPUArchState *env, cpu_log_instr_info_t *iinfo) {
+    if (!cap_store_tracker) {
+        cap_store_tracker = g_hash_table_new_full(
+            g_direct_hash, g_direct_equal, NULL, free_cap_store_entry);
+    }
+
+    // Check for capability stores in this instruction
+    for (int i = 0; i < iinfo->mem->len; i++) {
+        log_meminfo_t *minfo = &g_array_index(iinfo->mem, log_meminfo_t, i);
+        
+        if ((minfo->flags & LMI_ST) && (minfo->flags & LMI_CAP)) {
+            uint64_t addr = minfo->addr;
+            
+            // Create new entry
+            cap_store_entry_t *entry = g_malloc(sizeof(cap_store_entry_t));
+            entry->addr = addr;
+            
+            // Deep copy the instruction info
+            entry->iinfo = g_malloc(sizeof(cpu_log_instr_info_t));
+            memcpy(entry->iinfo, iinfo, sizeof(cpu_log_instr_info_t));
+            
+            // Deep copy the mem array (contains the capability data)
+            entry->iinfo->mem = g_array_sized_new(FALSE, FALSE, 
+                sizeof(log_meminfo_t), iinfo->mem->len);
+            g_array_append_vals(entry->iinfo->mem, iinfo->mem->data, iinfo->mem->len);
+            
+            // Deep copy the regs array (contains register dependencies)
+            entry->iinfo->regs = g_array_sized_new(FALSE, FALSE,
+                sizeof(log_reginfo_t), iinfo->regs->len);
+            g_array_append_vals(entry->iinfo->regs, iinfo->regs->data, iinfo->regs->len);
+            
+            // Insert/replace in hash table (old entry is automatically freed)
+            g_hash_table_replace(cap_store_tracker, 
+                               GSIZE_TO_POINTER(addr), entry);
+            break;  // Only track first cap store in this instruction
+        }
+    }
+}
+
+static void emit_all_tracked_cap_stores(CPUArchState *env) {
+    if (!cap_store_tracker) return;
+    
+    fprintf(stderr, "Emitting %u capability stores at SimPoint start\n", 
+            g_hash_table_size(cap_store_tracker));
+    
+    GHashTableIter iter;
+    gpointer key, value;
+    g_hash_table_iter_init(&iter, cap_store_tracker);
+    
+    while (g_hash_table_iter_next(&iter, &key, &value)) {
+        cap_store_entry_t *entry = (cap_store_entry_t *)value;
+        
+        emit_entry_event(env, entry->iinfo);
+    }
+    
+    // Clear the tracker after emission
+    g_hash_table_remove_all(cap_store_tracker);
+}
+#endif
+
 /* Common instruction commit implementation */
 static void do_instr_commit(CPUArchState *env)
 {
     cpu_log_instr_state_t *cpulog = get_cpu_log_state(env);
     cpu_log_instr_info_t *iinfo = get_cpu_log_instr_info(env);
+    static uint64_t instr_count = 0;
+    static bool tracing = false;
+    static bool in_warmup = false;
+    static bool stop_trace = false;
+    static int current_simpoint_idx = -1;
+    static bool started = false; 
+    static bool simpoint_file_open = false; 
+
 
     log_assert(cpulog != NULL && "Invalid log state");
-    log_assert(iinfo != NULL && "Invalid log buffer");
+    log_assert(iinfo != NULL && "Invalid log info");
 
     if (cpulog->force_drop)
         return;
@@ -597,6 +1209,220 @@ static void do_instr_commit(CPUArchState *env)
     if (cpulog->starting) {
         cpulog->starting = false;
         emit_start_event(env, cpu_get_recent_pc(env));
+        return;
+    }
+
+    if (stop_trace)
+        return;
+
+    if (START_PC != 0 && !started) {
+        if (iinfo->pc == START_PC) {
+            started = true;
+            fprintf(stderr, "Started tracing at start_pc: 0x%lx\n", START_PC);
+        } else return;
+    }
+
+    /* PC-based simpoints */
+    if (simpoint_pcs) {
+        /* Initialize PC tracking map if needed */
+        if (!pc_exec_count_map) {
+            pc_exec_count_map = g_hash_table_new_full(
+                g_direct_hash, g_direct_equal, NULL, g_free);
+        }
+
+        /* Update execution count for this PC */
+        if (iinfo->pc != 0) {
+            uint64_t *count = g_hash_table_lookup(pc_exec_count_map, 
+                                                  GSIZE_TO_POINTER(iinfo->pc));
+            if (!count) {
+                count = g_malloc(sizeof(uint64_t));
+                *count = 0;
+                g_hash_table_insert(pc_exec_count_map, 
+                                   GSIZE_TO_POINTER(iinfo->pc), count);
+            }
+
+            /* Check if we hit any simpoint trigger BEFORE incrementing */
+            if (!tracing) {
+                for (int i = 0; i < simpoint_pcs->len; i++) {
+                    simpoint_pc_entry_t *entry = &g_array_index(simpoint_pcs, 
+                                                               simpoint_pc_entry_t, i);
+                    
+                    if (iinfo->pc == entry->pc && *count == entry->execution_count) {
+                        
+                        /* Open new trace file */
+                        char filename[256];
+                        if (simpoint_file_open) {
+                            qemu_log_close();
+                        }
+                        snprintf(filename, sizeof(filename), "simpoint_%d.trace", i);
+                        fprintf(stderr, "Starting PC-based simpoint %d (pc=0x%lx, count=%lu), output: %s\n", 
+                                i, entry->pc, entry->execution_count, filename);           
+                        qemu_set_log_filename(filename, &error_fatal);
+                        simpoint_file_open = true;
+
+                        #ifdef TARGET_CHERI
+                        /* Emit all tracked capability stores at the start */
+                        emit_all_tracked_cap_stores(env);
+                        #endif
+                        
+                        /* Start tracing this simpoint */
+                        tracing = true;
+                        current_simpoint_idx = i;
+                        cpulog->simpoint_insn_count = 0;
+                        break;
+                    }
+                }
+            }
+            
+            /* Increment count AFTER checking for triggers */
+            (*count)++;
+        }
+
+        /* If tracing, count instructions */
+        if (tracing) {
+            /* Check if we've traced enough instructions BEFORE logging */
+            if (cpulog->simpoint_insn_count >= INTERVAL_SIZE) {
+                fprintf(stderr, "Ending PC-based simpoint %d\n", current_simpoint_idx);
+                if (simpoint_file_open) {
+                    qemu_log_close();
+                    simpoint_file_open = false;
+                }
+                tracing = false;
+                
+                if (current_simpoint_idx == simpoint_pcs->len - 1) {
+                    stop_trace = true;
+                }
+
+                current_simpoint_idx = -1;
+                cpulog->simpoint_insn_count = 0;
+                return;  
+            }
+            cpulog->simpoint_insn_count++;
+        }
+
+        /* Before simpoint starts, track capability stores */
+        if (!tracing) {
+            #ifdef TARGET_CHERI
+            track_cap_store(env, iinfo);
+            #endif
+            return;  // Don't emit full trace yet
+        }
+    }
+    /* Traditional interval-based simpoints */
+    else if (simpoints) {
+        bool should_trace = false;
+        bool is_warmup = false;
+        int simpoint_idx = -1;
+
+        for (int i = 0; i < simpoints->len; i++) {
+            uint64_t adjusted_start = g_array_index(adjusted_simpoints, uint64_t, i);
+            uint64_t start = g_array_index(simpoints, uint64_t, i);
+            uint64_t warmup_length = g_array_index(warmup_duration, uint64_t, i);
+            uint64_t simpoint_end = start + INTERVAL_SIZE - 1;  // Adjust to be inclusive
+            
+            /* Check if we're in this simpoint's range (including warmup) */
+            if (instr_count >= adjusted_start && instr_count <= simpoint_end) { 
+                should_trace = true;
+                simpoint_idx = i;
+                
+                /* Determine if we're in warmup or actual simpoint */
+                is_warmup = (warmup_length > 0 && instr_count < start);
+                break;
+            }
+        }
+        
+        instr_count++;  // Increment AFTER the check
+
+        if (should_trace) {
+            if (!tracing) {
+                /* Starting to trace a new (or first) simpoint */
+                char filename[256];
+                if (simpoint_file_open) { // Should be false, but good to check
+                    qemu_log_close();
+                }
+                snprintf(filename, sizeof(filename), "simpoint_%d.trace", simpoint_idx);
+                fprintf(stderr, "Starting simpoint %d (warmup: %s), output: %s\n", 
+                        simpoint_idx, is_warmup ? "yes" : "no", filename);           
+                qemu_set_log_filename(filename, &error_fatal);
+                simpoint_file_open = true;
+
+                #ifdef TARGET_CHERI
+                /* Emit all tracked capability stores at the start of this simpoint */
+                emit_all_tracked_cap_stores(env);
+                #endif
+
+                tracing = true;
+                in_warmup = is_warmup;
+                current_simpoint_idx = simpoint_idx;
+
+            } else if (simpoint_idx != current_simpoint_idx) {
+                
+                fprintf(stderr, "Switching from simpoint %d to %d (warmup: %s)\n",
+                        current_simpoint_idx, simpoint_idx, is_warmup ? "yes" : "no");
+                
+                // Close the old file
+                if (simpoint_file_open) {
+                    qemu_log_close();
+                }
+
+                // Open the new file
+                char filename[256];
+                snprintf(filename, sizeof(filename), "simpoint_%d.trace", simpoint_idx);
+                fprintf(stderr, "Starting new simpoint %d (warmup: %s), output: %s\n", 
+                        simpoint_idx, is_warmup ? "yes" : "no", filename);
+                qemu_set_log_filename(filename, &error_fatal);
+                simpoint_file_open = true;
+
+                #ifdef TARGET_CHERI
+                /* Emit capability stores for the new simpoint */
+                emit_all_tracked_cap_stores(env);
+                #endif
+
+                // Update state for the new simpoint
+                current_simpoint_idx = simpoint_idx;
+                in_warmup = is_warmup;
+            }
+            else if (in_warmup && !is_warmup && simpoint_idx == current_simpoint_idx) {
+                /* Transitioning from warmup to actual simpoint */
+                fprintf(stderr, "Ending warmup for simpoint %d\n", current_simpoint_idx);
+                in_warmup = false;
+            }
+        } else if (tracing) {
+            /* We were tracing but now we're outside any simpoint range */
+            fprintf(stderr, "Ending simpoint %d\n", current_simpoint_idx);
+
+            if (simpoint_file_open) {
+                qemu_log_close();
+                simpoint_file_open = false;
+            }
+
+            tracing = false;
+            in_warmup = false;
+            
+            /* Check if this was the last simpoint */
+            if (current_simpoint_idx == simpoints->len - 1) {
+                stop_trace = true;
+            }
+            current_simpoint_idx = -1;
+        }
+
+        if (!tracing && !stop_trace) {
+            uint64_t last_idx = simpoints->len - 1;
+            uint64_t last_end = g_array_index(simpoints, uint64_t, last_idx) + INTERVAL_SIZE;
+            if (instr_count > last_end) {
+                stop_trace = true;
+            }
+        }
+        
+        if (!should_trace) {
+            #ifdef TARGET_CHERI
+            track_cap_store(env, iinfo);
+            #endif
+            return;  // Don't emit full trace yet
+        }
+    }
+
+    if ((simpoint_pcs || simpoints) && !simpoint_file_open) {
         return;
     }
 
@@ -958,6 +1784,38 @@ void helper_qemu_log_instr_reg(CPUArchState *env, const void *reg_name,
         qemu_log_instr_reg(env, (const char *)reg_name, value);
 }
 
+void helper_qemu_log_instr_branch(CPUArchState *env, uint32_t taken, uint32_t branch_type)
+{
+    if (qemu_log_instr_check_enabled(env)) {
+        cpu_log_instr_info_t *iinfo = get_cpu_log_instr_info(env);
+        iinfo->is_branch = 1;
+        iinfo->branch_taken = taken ? 1 : 0;
+        iinfo->branch_type = (qemu_log_branch_type_t)branch_type;
+    }
+}
+
+void helper_qemu_log_reg_src(CPUArchState *env, uint32_t reg_id, uint32_t reg_type){
+    if (qemu_log_instr_check_enabled(env)) {
+        cpu_log_instr_info_t *iinfo = get_cpu_log_instr_info(env);
+        if (iinfo && iinfo->num_src_regs < 4) {
+            qemu_log_reg_info *r = &iinfo->src_regs[iinfo->num_src_regs++];
+            r->reg_id = (uint8_t)reg_id;
+            r->type = (LogRegType)reg_type;
+        }
+    }
+}
+
+void helper_qemu_log_reg_dst(CPUArchState *env, uint32_t reg_id, uint32_t reg_type){
+    if (qemu_log_instr_check_enabled(env)) {
+        cpu_log_instr_info_t *iinfo = get_cpu_log_instr_info(env);
+        if (iinfo && iinfo->num_dst_regs < 2) {
+            qemu_log_reg_info *r = &iinfo->dst_regs[iinfo->num_dst_regs++];
+            r->reg_id = (uint8_t)reg_id;
+            r->type = (LogRegType)reg_type;
+        }
+    }
+}
+
 #ifdef TARGET_CHERI
 void qemu_log_instr_cap(CPUArchState *env, const char *reg_name,
                          const cap_register_t *cr)
@@ -988,6 +1846,17 @@ void qemu_log_instr_cap_int(CPUArchState *env, const char *reg_name,
     r.name = reg_name;
     r.gpr = value;
     g_array_append_val(iinfo->regs, r);
+}
+
+
+void qemu_log_instr_mem_auth_cap(CPUArchState *env,
+                                 const cap_register_t *auth,
+                                 uint32_t regnum)
+{
+    cpu_log_instr_info_t *iinfo = get_cpu_log_instr_info(env);
+    iinfo->has_auth_cap = true;
+    iinfo->auth_cap = *auth;
+    iinfo->auth_cap_regnum = regnum;
 }
 #endif
 
@@ -1024,6 +1893,7 @@ void qemu_log_instr_st_int(CPUArchState *env, target_ulong addr, TCGMemOpIdx oi,
  * as well. Need to think whether there is value to keep logging what
  * was loaded directly.
  */
+
 static inline void qemu_log_instr_mem_cap(
     CPUArchState *env, target_ulong addr, int flags,
     const cap_register_t *value)
@@ -1035,7 +1905,7 @@ static inline void qemu_log_instr_mem_cap(
     m.op = 0;
     m.addr = addr;
     m.cap = *value;
-    g_array_append_val(iinfo->mem, m);
+    g_array_append_val(iinfo->mem, m);  
 }
 
 void qemu_log_instr_ld_cap(CPUArchState *env, target_ulong addr,
@@ -1673,6 +2543,18 @@ static trace_fmt_hooks_t trace_formats[] = {
         .emit_start = emit_nop_start,
         .emit_stop = emit_nop_stop,
         .emit_entry = emit_nop_entry
+    },
+    {   //charles
+        .emit_header = NULL,
+        .emit_start = emit_champsim_start,
+        .emit_stop = emit_champsim_stop,
+        .emit_entry = emit_champsim_entry
+    },
+    {   //charles
+        .emit_header = NULL,
+        .emit_start = emit_champsim_cheri_start,
+        .emit_stop = emit_champsim_cheri_stop,
+        .emit_entry = emit_champsim_cheri_entry
     }
 };
 

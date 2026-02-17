@@ -370,6 +370,13 @@ DEF_HELPER_FLAGS_4(qemu_log_instr_load32, TCG_CALL_NO_WG, void, env,
 DEF_HELPER_FLAGS_4(qemu_log_instr_store32, TCG_CALL_NO_WG, void, env,
                    cap_checked_ptr, i32, memop_idx)
 DEF_HELPER_FLAGS_3(qemu_log_instr_reg, TCG_CALL_NO_WG, void, env, cptr, tl)
+// charles: new helper for branches
+DEF_HELPER_FLAGS_3(qemu_log_instr_branch, TCG_CALL_NO_WG, void, env, i32, i32)
+
+// charles: new helper for source and destination register IDs and register types
+DEF_HELPER_FLAGS_3(qemu_log_reg_src, TCG_CALL_NO_WG, void, env, i32, i32)
+DEF_HELPER_FLAGS_3(qemu_log_reg_dst, TCG_CALL_NO_WG, void, env, i32, i32)
+
 #ifdef TARGET_CHERI
 DEF_HELPER_FLAGS_3(qemu_log_instr_cap, TCG_CALL_NO_WG, void, env, cptr, cptr)
 #endif
