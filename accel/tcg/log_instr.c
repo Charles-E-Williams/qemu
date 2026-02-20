@@ -865,7 +865,7 @@ static void emit_champsim_cheri_entry(CPUArchState *env, cpu_log_instr_info_t *i
         trace.base = cap_get_base(cr);
         trace.length = cap_get_length_sat(cr);
         trace.offset = cap_get_offset(cr);
-        trace.permissions = COMBINED_PERMS_VALUE(cr);
+        trace.permissions = cap_get_perms(cr);
     } else if (iinfo->has_auth_cap) {
         // Regular load/store authorized by a capability (DDC or capmode register)
         const cap_register_t *ac = &iinfo->auth_cap;
@@ -873,7 +873,7 @@ static void emit_champsim_cheri_entry(CPUArchState *env, cpu_log_instr_info_t *i
         trace.base = cap_get_base(ac);
         trace.offset = cap_get_offset(ac);
         trace.length = cap_get_length_sat(ac);
-        trace.permissions = (uint32_t)cap_get_perms(ac);
+        trace.permissions = cap_get_perms(ac);
         trace.cap_op = 1;
     }
 #endif
@@ -1137,7 +1137,7 @@ build_cheri_trace_entry(cpu_log_instr_info_t *iinfo, log_meminfo_t *minfo)
     trace.base          = cap_get_base(cr);
     trace.length        = cap_get_length_sat(cr);
     trace.offset        = cap_get_offset(cr);
-    trace.permissions   = COMBINED_PERMS_VALUE(cr);
+    trace.permissions   = cap_get_perms(cr);
 
     trace.destination_memory[0] = minfo->addr;
 
