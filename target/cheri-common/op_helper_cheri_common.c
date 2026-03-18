@@ -161,7 +161,7 @@ void CHERI_HELPER_IMPL(ddc_check_bounds(CPUArchState *env, target_ulong addr,
               /*instavail=*/true, GETPC());
 
 #if defined(CONFIG_TCG_LOG_INSTR)
-    if (qemu_log_instr_enabled(env)) {
+    if (qemu_log_instr_enabled(env) && !log_instr_fast_forward) {
         qemu_log_instr_mem_auth_cap(env, ddc, CHERI_EXC_REGNUM_DDC);
     }
 #endif
@@ -1254,7 +1254,7 @@ static inline QEMU_ALWAYS_INLINE target_ulong cap_check_common(
     const cap_register_t *cbp = get_load_store_base_cap(env, cb);
 
 #if defined(CONFIG_TCG_LOG_INSTR)
-    if (qemu_log_instr_enabled(env)) {
+    if (qemu_log_instr_enabled(env) && !log_instr_fast_forward) {
         qemu_log_instr_mem_auth_cap(env, cbp, cb);
     }
 #endif
@@ -1312,7 +1312,7 @@ void CHERI_HELPER_IMPL(load_cap_via_cap(CPUArchState *env, uint32_t dstreg,
     const cap_register_t *cbp = get_capreg_or_special(env, authreg);
 
 #if defined(CONFIG_TCG_LOG_INSTR)
-    if (qemu_log_instr_enabled(env)) {
+    if (qemu_log_instr_enabled(env) && !log_instr_fast_forward) {
         qemu_log_instr_mem_auth_cap(env, cbp, authreg);
     }
 #endif
@@ -1331,7 +1331,7 @@ void CHERI_HELPER_IMPL(load_cap_via_ddc(CPUArchState *env, uint32_t dstreg,
     GET_HOST_RETPC();
     const cap_register_t *ddc = cheri_get_ddc(env);
 #if defined(CONFIG_TCG_LOG_INSTR)
-    if (qemu_log_instr_enabled(env)) {
+    if (qemu_log_instr_enabled(env) && !log_instr_fast_forward) {
         qemu_log_instr_mem_auth_cap(env, ddc, CHERI_EXC_REGNUM_DDC);
     }
 #endif
@@ -1351,7 +1351,7 @@ void CHERI_HELPER_IMPL(store_cap_via_cap(CPUArchState *env, uint32_t valreg,
     const cap_register_t *cbp = get_capreg_or_special(env, authreg);
 
 #if defined(CONFIG_TCG_LOG_INSTR)
-    if (qemu_log_instr_enabled(env)) {
+    if (qemu_log_instr_enabled(env) && !log_instr_fast_forward) {
         qemu_log_instr_mem_auth_cap(env, cbp, authreg);
     }
 #endif
@@ -1371,7 +1371,7 @@ void CHERI_HELPER_IMPL(store_cap_via_ddc(CPUArchState *env, uint32_t valreg,
     const cap_register_t *ddc = cheri_get_ddc(env);
 
 #if defined(CONFIG_TCG_LOG_INSTR)
-    if (qemu_log_instr_enabled(env)) {
+    if (qemu_log_instr_enabled(env) && !log_instr_fast_forward) {
         qemu_log_instr_mem_auth_cap(env, ddc, CHERI_EXC_REGNUM_DDC);
     }
 #endif
@@ -1481,7 +1481,7 @@ bool load_cap_from_memory_raw_tag_mmu_idx(
 #endif
 #if defined(CONFIG_TCG_LOG_INSTR)
     /* Log capability memory access as a single access */
-    if (qemu_log_instr_enabled(env)) {
+    if (qemu_log_instr_enabled(env) && !log_instr_fast_forward) {
         /*
          * Decompress to log all fields
          * TODO(am2419): why do we decompress? we and up having to compress

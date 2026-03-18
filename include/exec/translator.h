@@ -24,7 +24,7 @@
 #include "exec/cpu_ldst.h"
 #include "exec/plugin-gen.h"
 #include "tcg/tcg.h"
-
+#include "qemu/log_instr.h"
 
 /**
  * DisasJumpType:
@@ -85,6 +85,7 @@ typedef struct DisasContextBase {
     bool singlestep_enabled;
 #ifdef CONFIG_TCG_LOG_INSTR
     bool log_instr_enabled;
+    log_instr_mode_t log_instr_mode;
     uint8_t printf_used_ptr;
 #endif
 } DisasContextBase;

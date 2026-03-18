@@ -22,21 +22,23 @@ static bool trans_fld(DisasContext *ctx, arg_fld *a)
 {
     REQUIRE_FPU;
     REQUIRE_EXT(ctx, RVD);
-    
-    // Log source: rs1 is a GPR (base address)
-    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
-    TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
-    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_gpr);
-    tcg_temp_free_i32(rs1);
-    tcg_temp_free_i32(type_gpr);
-    
-    // Log destination: rd is an FPR
-    TCGv_i32 rd = tcg_const_i32(a->rd);
-    TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
-    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_fpr);
-    tcg_temp_free_i32(rd);
-    tcg_temp_free_i32(type_fpr);
-    
+
+    if (qemu_ctx_logging_full(ctx)) {
+        // Log source: rs1 is a GPR (base address)
+        TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+        TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
+        gen_helper_qemu_log_reg_src(cpu_env, rs1, type_gpr);
+        tcg_temp_free_i32(rs1);
+        tcg_temp_free_i32(type_gpr);
+
+        // Log destination: rd is an FPR
+        TCGv_i32 rd = tcg_const_i32(a->rd);
+        TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
+        gen_helper_qemu_log_reg_dst(cpu_env, rd, type_fpr);
+        tcg_temp_free_i32(rd);
+        tcg_temp_free_i32(type_fpr);
+    }
+
     const MemOp mop = MO_TEQ;
     TCGv_cap_checked_ptr t0 =
         get_capmode_dependent_load_addr(ctx, a->rs1, a->imm, mop);
@@ -52,21 +54,23 @@ static bool trans_fsd(DisasContext *ctx, arg_fsd *a)
 {
     REQUIRE_FPU;
     REQUIRE_EXT(ctx, RVD);
-    
-    // Log source: rs1 is a GPR (base address)
-    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
-    TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
-    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_gpr);
-    tcg_temp_free_i32(rs1);
-    tcg_temp_free_i32(type_gpr);
-    
-    // Log source: rs2 is an FPR (data to store)
-    TCGv_i32 rs2 = tcg_const_i32(a->rs2);
-    TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
-    gen_helper_qemu_log_reg_src(cpu_env, rs2, type_fpr);
-    tcg_temp_free_i32(rs2);
-    tcg_temp_free_i32(type_fpr);
-    
+
+    if (qemu_ctx_logging_full(ctx)) {
+        // Log source: rs1 is a GPR (base address)
+        TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+        TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
+        gen_helper_qemu_log_reg_src(cpu_env, rs1, type_gpr);
+        tcg_temp_free_i32(rs1);
+        tcg_temp_free_i32(type_gpr);
+
+        // Log source: rs2 is an FPR (data to store)
+        TCGv_i32 rs2 = tcg_const_i32(a->rs2);
+        TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
+        gen_helper_qemu_log_reg_src(cpu_env, rs2, type_fpr);
+        tcg_temp_free_i32(rs2);
+        tcg_temp_free_i32(type_fpr);
+    }
+
     const MemOp mop = MO_TEQ;
     TCGv_cap_checked_ptr t0 =
         get_capmode_dependent_store_addr(ctx, a->rs1, a->imm, mop);
@@ -80,29 +84,29 @@ static bool trans_fmadd_d(DisasContext *ctx, arg_fmadd_d *a)
 {
     REQUIRE_FPU;
     REQUIRE_EXT(ctx, RVD);
-    
-    TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
-    
-    // Log sources: rs1, rs2, rs3 are all FPRs
-    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
-    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_fpr);
-    tcg_temp_free_i32(rs1);
-    
-    TCGv_i32 rs2 = tcg_const_i32(a->rs2);
-    gen_helper_qemu_log_reg_src(cpu_env, rs2, type_fpr);
-    tcg_temp_free_i32(rs2);
-    
-    TCGv_i32 rs3 = tcg_const_i32(a->rs3);
-    gen_helper_qemu_log_reg_src(cpu_env, rs3, type_fpr);
-    tcg_temp_free_i32(rs3);
-    
-    // Log destination: rd is an FPR
-    TCGv_i32 rd = tcg_const_i32(a->rd);
-    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_fpr);
-    tcg_temp_free_i32(rd);
-    
-    tcg_temp_free_i32(type_fpr);
-    
+
+    if (qemu_ctx_logging_full(ctx)) {
+        TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
+
+        TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+        gen_helper_qemu_log_reg_src(cpu_env, rs1, type_fpr);
+        tcg_temp_free_i32(rs1);
+
+        TCGv_i32 rs2 = tcg_const_i32(a->rs2);
+        gen_helper_qemu_log_reg_src(cpu_env, rs2, type_fpr);
+        tcg_temp_free_i32(rs2);
+
+        TCGv_i32 rs3 = tcg_const_i32(a->rs3);
+        gen_helper_qemu_log_reg_src(cpu_env, rs3, type_fpr);
+        tcg_temp_free_i32(rs3);
+
+        TCGv_i32 rd = tcg_const_i32(a->rd);
+        gen_helper_qemu_log_reg_dst(cpu_env, rd, type_fpr);
+        tcg_temp_free_i32(rd);
+
+        tcg_temp_free_i32(type_fpr);
+    }
+
     gen_set_rm(ctx, a->rm);
     gen_helper_fmadd_d(cpu_fpr[a->rd], cpu_env, cpu_fpr[a->rs1],
                        cpu_fpr[a->rs2], cpu_fpr[a->rs3]);
@@ -114,29 +118,29 @@ static bool trans_fmsub_d(DisasContext *ctx, arg_fmsub_d *a)
 {
     REQUIRE_FPU;
     REQUIRE_EXT(ctx, RVD);
-    
-    TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
-    
-    // Log sources: rs1, rs2, rs3 are all FPRs
-    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
-    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_fpr);
-    tcg_temp_free_i32(rs1);
-    
-    TCGv_i32 rs2 = tcg_const_i32(a->rs2);
-    gen_helper_qemu_log_reg_src(cpu_env, rs2, type_fpr);
-    tcg_temp_free_i32(rs2);
-    
-    TCGv_i32 rs3 = tcg_const_i32(a->rs3);
-    gen_helper_qemu_log_reg_src(cpu_env, rs3, type_fpr);
-    tcg_temp_free_i32(rs3);
-    
-    // Log destination: rd is an FPR
-    TCGv_i32 rd = tcg_const_i32(a->rd);
-    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_fpr);
-    tcg_temp_free_i32(rd);
-    
-    tcg_temp_free_i32(type_fpr);
-    
+
+    if (qemu_ctx_logging_full(ctx)) {
+        TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
+
+        TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+        gen_helper_qemu_log_reg_src(cpu_env, rs1, type_fpr);
+        tcg_temp_free_i32(rs1);
+
+        TCGv_i32 rs2 = tcg_const_i32(a->rs2);
+        gen_helper_qemu_log_reg_src(cpu_env, rs2, type_fpr);
+        tcg_temp_free_i32(rs2);
+
+        TCGv_i32 rs3 = tcg_const_i32(a->rs3);
+        gen_helper_qemu_log_reg_src(cpu_env, rs3, type_fpr);
+        tcg_temp_free_i32(rs3);
+
+        TCGv_i32 rd = tcg_const_i32(a->rd);
+        gen_helper_qemu_log_reg_dst(cpu_env, rd, type_fpr);
+        tcg_temp_free_i32(rd);
+
+        tcg_temp_free_i32(type_fpr);
+    }
+
     gen_set_rm(ctx, a->rm);
     gen_helper_fmsub_d(cpu_fpr[a->rd], cpu_env, cpu_fpr[a->rs1],
                        cpu_fpr[a->rs2], cpu_fpr[a->rs3]);
@@ -148,29 +152,29 @@ static bool trans_fnmsub_d(DisasContext *ctx, arg_fnmsub_d *a)
 {
     REQUIRE_FPU;
     REQUIRE_EXT(ctx, RVD);
-    
-    TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
-    
-    // Log sources: rs1, rs2, rs3 are all FPRs
-    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
-    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_fpr);
-    tcg_temp_free_i32(rs1);
-    
-    TCGv_i32 rs2 = tcg_const_i32(a->rs2);
-    gen_helper_qemu_log_reg_src(cpu_env, rs2, type_fpr);
-    tcg_temp_free_i32(rs2);
-    
-    TCGv_i32 rs3 = tcg_const_i32(a->rs3);
-    gen_helper_qemu_log_reg_src(cpu_env, rs3, type_fpr);
-    tcg_temp_free_i32(rs3);
-    
-    // Log destination: rd is an FPR
-    TCGv_i32 rd = tcg_const_i32(a->rd);
-    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_fpr);
-    tcg_temp_free_i32(rd);
-    
-    tcg_temp_free_i32(type_fpr);
-    
+
+    if (qemu_ctx_logging_full(ctx)) {
+        TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
+
+        TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+        gen_helper_qemu_log_reg_src(cpu_env, rs1, type_fpr);
+        tcg_temp_free_i32(rs1);
+
+        TCGv_i32 rs2 = tcg_const_i32(a->rs2);
+        gen_helper_qemu_log_reg_src(cpu_env, rs2, type_fpr);
+        tcg_temp_free_i32(rs2);
+
+        TCGv_i32 rs3 = tcg_const_i32(a->rs3);
+        gen_helper_qemu_log_reg_src(cpu_env, rs3, type_fpr);
+        tcg_temp_free_i32(rs3);
+
+        TCGv_i32 rd = tcg_const_i32(a->rd);
+        gen_helper_qemu_log_reg_dst(cpu_env, rd, type_fpr);
+        tcg_temp_free_i32(rd);
+
+        tcg_temp_free_i32(type_fpr);
+    }
+
     gen_set_rm(ctx, a->rm);
     gen_helper_fnmsub_d(cpu_fpr[a->rd], cpu_env, cpu_fpr[a->rs1],
                         cpu_fpr[a->rs2], cpu_fpr[a->rs3]);
@@ -182,29 +186,29 @@ static bool trans_fnmadd_d(DisasContext *ctx, arg_fnmadd_d *a)
 {
     REQUIRE_FPU;
     REQUIRE_EXT(ctx, RVD);
-    
-    TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
-    
-    // Log sources: rs1, rs2, rs3 are all FPRs
-    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
-    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_fpr);
-    tcg_temp_free_i32(rs1);
-    
-    TCGv_i32 rs2 = tcg_const_i32(a->rs2);
-    gen_helper_qemu_log_reg_src(cpu_env, rs2, type_fpr);
-    tcg_temp_free_i32(rs2);
-    
-    TCGv_i32 rs3 = tcg_const_i32(a->rs3);
-    gen_helper_qemu_log_reg_src(cpu_env, rs3, type_fpr);
-    tcg_temp_free_i32(rs3);
-    
-    // Log destination: rd is an FPR
-    TCGv_i32 rd = tcg_const_i32(a->rd);
-    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_fpr);
-    tcg_temp_free_i32(rd);
-    
-    tcg_temp_free_i32(type_fpr);
-    
+
+    if (qemu_ctx_logging_full(ctx)) {
+        TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
+
+        TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+        gen_helper_qemu_log_reg_src(cpu_env, rs1, type_fpr);
+        tcg_temp_free_i32(rs1);
+
+        TCGv_i32 rs2 = tcg_const_i32(a->rs2);
+        gen_helper_qemu_log_reg_src(cpu_env, rs2, type_fpr);
+        tcg_temp_free_i32(rs2);
+
+        TCGv_i32 rs3 = tcg_const_i32(a->rs3);
+        gen_helper_qemu_log_reg_src(cpu_env, rs3, type_fpr);
+        tcg_temp_free_i32(rs3);
+
+        TCGv_i32 rd = tcg_const_i32(a->rd);
+        gen_helper_qemu_log_reg_dst(cpu_env, rd, type_fpr);
+        tcg_temp_free_i32(rd);
+
+        tcg_temp_free_i32(type_fpr);
+    }
+
     gen_set_rm(ctx, a->rm);
     gen_helper_fnmadd_d(cpu_fpr[a->rd], cpu_env, cpu_fpr[a->rs1],
                         cpu_fpr[a->rs2], cpu_fpr[a->rs3]);
@@ -217,23 +221,23 @@ static bool trans_fadd_d(DisasContext *ctx, arg_fadd_d *a)
     REQUIRE_FPU;
     REQUIRE_EXT(ctx, RVD);
 
-    TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
-    
-    // Log sources: rs1 and rs2 are FPRs
-    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
-    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_fpr);
-    tcg_temp_free_i32(rs1);
-    
-    TCGv_i32 rs2 = tcg_const_i32(a->rs2);
-    gen_helper_qemu_log_reg_src(cpu_env, rs2, type_fpr);
-    tcg_temp_free_i32(rs2);
-    
-    // Log destination: rd is an FPR
-    TCGv_i32 rd = tcg_const_i32(a->rd);
-    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_fpr);
-    tcg_temp_free_i32(rd);
-    
-    tcg_temp_free_i32(type_fpr);
+    if (qemu_ctx_logging_full(ctx)) {
+        TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
+
+        TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+        gen_helper_qemu_log_reg_src(cpu_env, rs1, type_fpr);
+        tcg_temp_free_i32(rs1);
+
+        TCGv_i32 rs2 = tcg_const_i32(a->rs2);
+        gen_helper_qemu_log_reg_src(cpu_env, rs2, type_fpr);
+        tcg_temp_free_i32(rs2);
+
+        TCGv_i32 rd = tcg_const_i32(a->rd);
+        gen_helper_qemu_log_reg_dst(cpu_env, rd, type_fpr);
+        tcg_temp_free_i32(rd);
+
+        tcg_temp_free_i32(type_fpr);
+    }
 
     gen_set_rm(ctx, a->rm);
     gen_helper_fadd_d(cpu_fpr[a->rd], cpu_env,
@@ -248,23 +252,23 @@ static bool trans_fsub_d(DisasContext *ctx, arg_fsub_d *a)
     REQUIRE_FPU;
     REQUIRE_EXT(ctx, RVD);
 
-    TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
-    
-    // Log sources: rs1 and rs2 are FPRs
-    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
-    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_fpr);
-    tcg_temp_free_i32(rs1);
-    
-    TCGv_i32 rs2 = tcg_const_i32(a->rs2);
-    gen_helper_qemu_log_reg_src(cpu_env, rs2, type_fpr);
-    tcg_temp_free_i32(rs2);
-    
-    // Log destination: rd is an FPR
-    TCGv_i32 rd = tcg_const_i32(a->rd);
-    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_fpr);
-    tcg_temp_free_i32(rd);
-    
-    tcg_temp_free_i32(type_fpr);
+    if (qemu_ctx_logging_full(ctx)) {
+        TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
+
+        TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+        gen_helper_qemu_log_reg_src(cpu_env, rs1, type_fpr);
+        tcg_temp_free_i32(rs1);
+
+        TCGv_i32 rs2 = tcg_const_i32(a->rs2);
+        gen_helper_qemu_log_reg_src(cpu_env, rs2, type_fpr);
+        tcg_temp_free_i32(rs2);
+
+        TCGv_i32 rd = tcg_const_i32(a->rd);
+        gen_helper_qemu_log_reg_dst(cpu_env, rd, type_fpr);
+        tcg_temp_free_i32(rd);
+
+        tcg_temp_free_i32(type_fpr);
+    }
 
     gen_set_rm(ctx, a->rm);
     gen_helper_fsub_d(cpu_fpr[a->rd], cpu_env,
@@ -279,23 +283,23 @@ static bool trans_fmul_d(DisasContext *ctx, arg_fmul_d *a)
     REQUIRE_FPU;
     REQUIRE_EXT(ctx, RVD);
 
-    TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
-    
-    // Log sources: rs1 and rs2 are FPRs
-    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
-    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_fpr);
-    tcg_temp_free_i32(rs1);
-    
-    TCGv_i32 rs2 = tcg_const_i32(a->rs2);
-    gen_helper_qemu_log_reg_src(cpu_env, rs2, type_fpr);
-    tcg_temp_free_i32(rs2);
-    
-    // Log destination: rd is an FPR
-    TCGv_i32 rd = tcg_const_i32(a->rd);
-    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_fpr);
-    tcg_temp_free_i32(rd);
-    
-    tcg_temp_free_i32(type_fpr);
+    if (qemu_ctx_logging_full(ctx)) {
+        TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
+
+        TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+        gen_helper_qemu_log_reg_src(cpu_env, rs1, type_fpr);
+        tcg_temp_free_i32(rs1);
+
+        TCGv_i32 rs2 = tcg_const_i32(a->rs2);
+        gen_helper_qemu_log_reg_src(cpu_env, rs2, type_fpr);
+        tcg_temp_free_i32(rs2);
+
+        TCGv_i32 rd = tcg_const_i32(a->rd);
+        gen_helper_qemu_log_reg_dst(cpu_env, rd, type_fpr);
+        tcg_temp_free_i32(rd);
+
+        tcg_temp_free_i32(type_fpr);
+    }
 
     gen_set_rm(ctx, a->rm);
     gen_helper_fmul_d(cpu_fpr[a->rd], cpu_env,
@@ -310,23 +314,23 @@ static bool trans_fdiv_d(DisasContext *ctx, arg_fdiv_d *a)
     REQUIRE_FPU;
     REQUIRE_EXT(ctx, RVD);
 
-    TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
-    
-    // Log sources: rs1 and rs2 are FPRs
-    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
-    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_fpr);
-    tcg_temp_free_i32(rs1);
-    
-    TCGv_i32 rs2 = tcg_const_i32(a->rs2);
-    gen_helper_qemu_log_reg_src(cpu_env, rs2, type_fpr);
-    tcg_temp_free_i32(rs2);
-    
-    // Log destination: rd is an FPR
-    TCGv_i32 rd = tcg_const_i32(a->rd);
-    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_fpr);
-    tcg_temp_free_i32(rd);
-    
-    tcg_temp_free_i32(type_fpr);
+    if (qemu_ctx_logging_full(ctx)) {
+        TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
+
+        TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+        gen_helper_qemu_log_reg_src(cpu_env, rs1, type_fpr);
+        tcg_temp_free_i32(rs1);
+
+        TCGv_i32 rs2 = tcg_const_i32(a->rs2);
+        gen_helper_qemu_log_reg_src(cpu_env, rs2, type_fpr);
+        tcg_temp_free_i32(rs2);
+
+        TCGv_i32 rd = tcg_const_i32(a->rd);
+        gen_helper_qemu_log_reg_dst(cpu_env, rd, type_fpr);
+        tcg_temp_free_i32(rd);
+
+        tcg_temp_free_i32(type_fpr);
+    }
 
     gen_set_rm(ctx, a->rm);
     gen_helper_fdiv_d(cpu_fpr[a->rd], cpu_env,
@@ -341,19 +345,19 @@ static bool trans_fsqrt_d(DisasContext *ctx, arg_fsqrt_d *a)
     REQUIRE_FPU;
     REQUIRE_EXT(ctx, RVD);
 
-    TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
-    
-    // Log source: rs1 is an FPR
-    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
-    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_fpr);
-    tcg_temp_free_i32(rs1);
-    
-    // Log destination: rd is an FPR
-    TCGv_i32 rd = tcg_const_i32(a->rd);
-    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_fpr);
-    tcg_temp_free_i32(rd);
-    
-    tcg_temp_free_i32(type_fpr);
+    if (qemu_ctx_logging_full(ctx)) {
+        TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
+
+        TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+        gen_helper_qemu_log_reg_src(cpu_env, rs1, type_fpr);
+        tcg_temp_free_i32(rs1);
+
+        TCGv_i32 rd = tcg_const_i32(a->rd);
+        gen_helper_qemu_log_reg_dst(cpu_env, rd, type_fpr);
+        tcg_temp_free_i32(rd);
+
+        tcg_temp_free_i32(type_fpr);
+    }
 
     gen_set_rm(ctx, a->rm);
     gen_helper_fsqrt_d(cpu_fpr[a->rd], cpu_env, cpu_fpr[a->rs1]);
@@ -364,27 +368,26 @@ static bool trans_fsqrt_d(DisasContext *ctx, arg_fsqrt_d *a)
 
 static bool trans_fsgnj_d(DisasContext *ctx, arg_fsgnj_d *a)
 {
-    TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
-    
-    // Log source: rs1 is an FPR
-    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
-    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_fpr);
-    tcg_temp_free_i32(rs1);
-    
-    // Log source: rs2 is an FPR (only if different from rs1)
-    if (a->rs1 != a->rs2) {
-        TCGv_i32 rs2 = tcg_const_i32(a->rs2);
-        gen_helper_qemu_log_reg_src(cpu_env, rs2, type_fpr);
-        tcg_temp_free_i32(rs2);
+    if (qemu_ctx_logging_full(ctx)) {
+        TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
+
+        TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+        gen_helper_qemu_log_reg_src(cpu_env, rs1, type_fpr);
+        tcg_temp_free_i32(rs1);
+
+        if (a->rs1 != a->rs2) {
+            TCGv_i32 rs2 = tcg_const_i32(a->rs2);
+            gen_helper_qemu_log_reg_src(cpu_env, rs2, type_fpr);
+            tcg_temp_free_i32(rs2);
+        }
+
+        TCGv_i32 rd = tcg_const_i32(a->rd);
+        gen_helper_qemu_log_reg_dst(cpu_env, rd, type_fpr);
+        tcg_temp_free_i32(rd);
+
+        tcg_temp_free_i32(type_fpr);
     }
-    
-    // Log destination: rd is an FPR
-    TCGv_i32 rd = tcg_const_i32(a->rd);
-    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_fpr);
-    tcg_temp_free_i32(rd);
-    
-    tcg_temp_free_i32(type_fpr);
-    
+
     if (a->rs1 == a->rs2) { /* FMOV */
         tcg_gen_mov_i64(cpu_fpr[a->rd], cpu_fpr[a->rs1]);
     } else {
@@ -399,28 +402,27 @@ static bool trans_fsgnjn_d(DisasContext *ctx, arg_fsgnjn_d *a)
 {
     REQUIRE_FPU;
     REQUIRE_EXT(ctx, RVD);
-    
-    TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
-    
-    // Log source: rs1 is an FPR
-    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
-    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_fpr);
-    tcg_temp_free_i32(rs1);
-    
-    // Log source: rs2 is an FPR (only if different from rs1)
-    if (a->rs1 != a->rs2) {
-        TCGv_i32 rs2 = tcg_const_i32(a->rs2);
-        gen_helper_qemu_log_reg_src(cpu_env, rs2, type_fpr);
-        tcg_temp_free_i32(rs2);
+
+    if (qemu_ctx_logging_full(ctx)) {
+        TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
+
+        TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+        gen_helper_qemu_log_reg_src(cpu_env, rs1, type_fpr);
+        tcg_temp_free_i32(rs1);
+
+        if (a->rs1 != a->rs2) {
+            TCGv_i32 rs2 = tcg_const_i32(a->rs2);
+            gen_helper_qemu_log_reg_src(cpu_env, rs2, type_fpr);
+            tcg_temp_free_i32(rs2);
+        }
+
+        TCGv_i32 rd = tcg_const_i32(a->rd);
+        gen_helper_qemu_log_reg_dst(cpu_env, rd, type_fpr);
+        tcg_temp_free_i32(rd);
+
+        tcg_temp_free_i32(type_fpr);
     }
-    
-    // Log destination: rd is an FPR
-    TCGv_i32 rd = tcg_const_i32(a->rd);
-    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_fpr);
-    tcg_temp_free_i32(rd);
-    
-    tcg_temp_free_i32(type_fpr);
-    
+
     if (a->rs1 == a->rs2) { /* FNEG */
         tcg_gen_xori_i64(cpu_fpr[a->rd], cpu_fpr[a->rs1], INT64_MIN);
     } else {
@@ -437,28 +439,27 @@ static bool trans_fsgnjx_d(DisasContext *ctx, arg_fsgnjx_d *a)
 {
     REQUIRE_FPU;
     REQUIRE_EXT(ctx, RVD);
-    
-    TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
-    
-    // Log source: rs1 is an FPR
-    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
-    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_fpr);
-    tcg_temp_free_i32(rs1);
-    
-    // Log source: rs2 is an FPR (only if different from rs1)
-    if (a->rs1 != a->rs2) {
-        TCGv_i32 rs2 = tcg_const_i32(a->rs2);
-        gen_helper_qemu_log_reg_src(cpu_env, rs2, type_fpr);
-        tcg_temp_free_i32(rs2);
+
+    if (qemu_ctx_logging_full(ctx)) {
+        TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
+
+        TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+        gen_helper_qemu_log_reg_src(cpu_env, rs1, type_fpr);
+        tcg_temp_free_i32(rs1);
+
+        if (a->rs1 != a->rs2) {
+            TCGv_i32 rs2 = tcg_const_i32(a->rs2);
+            gen_helper_qemu_log_reg_src(cpu_env, rs2, type_fpr);
+            tcg_temp_free_i32(rs2);
+        }
+
+        TCGv_i32 rd = tcg_const_i32(a->rd);
+        gen_helper_qemu_log_reg_dst(cpu_env, rd, type_fpr);
+        tcg_temp_free_i32(rd);
+
+        tcg_temp_free_i32(type_fpr);
     }
-    
-    // Log destination: rd is an FPR
-    TCGv_i32 rd = tcg_const_i32(a->rd);
-    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_fpr);
-    tcg_temp_free_i32(rd);
-    
-    tcg_temp_free_i32(type_fpr);
-    
+
     if (a->rs1 == a->rs2) { /* FABS */
         tcg_gen_andi_i64(cpu_fpr[a->rd], cpu_fpr[a->rs1], ~INT64_MIN);
     } else {
@@ -476,23 +477,23 @@ static bool trans_fmin_d(DisasContext *ctx, arg_fmin_d *a)
     REQUIRE_FPU;
     REQUIRE_EXT(ctx, RVD);
 
-    TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
-    
-    // Log sources: rs1 and rs2 are FPRs
-    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
-    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_fpr);
-    tcg_temp_free_i32(rs1);
-    
-    TCGv_i32 rs2 = tcg_const_i32(a->rs2);
-    gen_helper_qemu_log_reg_src(cpu_env, rs2, type_fpr);
-    tcg_temp_free_i32(rs2);
-    
-    // Log destination: rd is an FPR
-    TCGv_i32 rd = tcg_const_i32(a->rd);
-    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_fpr);
-    tcg_temp_free_i32(rd);
-    
-    tcg_temp_free_i32(type_fpr);
+    if (qemu_ctx_logging_full(ctx)) {
+        TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
+
+        TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+        gen_helper_qemu_log_reg_src(cpu_env, rs1, type_fpr);
+        tcg_temp_free_i32(rs1);
+
+        TCGv_i32 rs2 = tcg_const_i32(a->rs2);
+        gen_helper_qemu_log_reg_src(cpu_env, rs2, type_fpr);
+        tcg_temp_free_i32(rs2);
+
+        TCGv_i32 rd = tcg_const_i32(a->rd);
+        gen_helper_qemu_log_reg_dst(cpu_env, rd, type_fpr);
+        tcg_temp_free_i32(rd);
+
+        tcg_temp_free_i32(type_fpr);
+    }
 
     gen_helper_fmin_d(cpu_fpr[a->rd], cpu_env,
                       cpu_fpr[a->rs1], cpu_fpr[a->rs2]);
@@ -506,23 +507,23 @@ static bool trans_fmax_d(DisasContext *ctx, arg_fmax_d *a)
     REQUIRE_FPU;
     REQUIRE_EXT(ctx, RVD);
 
-    TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
-    
-    // Log sources: rs1 and rs2 are FPRs
-    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
-    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_fpr);
-    tcg_temp_free_i32(rs1);
-    
-    TCGv_i32 rs2 = tcg_const_i32(a->rs2);
-    gen_helper_qemu_log_reg_src(cpu_env, rs2, type_fpr);
-    tcg_temp_free_i32(rs2);
-    
-    // Log destination: rd is an FPR
-    TCGv_i32 rd = tcg_const_i32(a->rd);
-    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_fpr);
-    tcg_temp_free_i32(rd);
-    
-    tcg_temp_free_i32(type_fpr);
+    if (qemu_ctx_logging_full(ctx)) {
+        TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
+
+        TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+        gen_helper_qemu_log_reg_src(cpu_env, rs1, type_fpr);
+        tcg_temp_free_i32(rs1);
+
+        TCGv_i32 rs2 = tcg_const_i32(a->rs2);
+        gen_helper_qemu_log_reg_src(cpu_env, rs2, type_fpr);
+        tcg_temp_free_i32(rs2);
+
+        TCGv_i32 rd = tcg_const_i32(a->rd);
+        gen_helper_qemu_log_reg_dst(cpu_env, rd, type_fpr);
+        tcg_temp_free_i32(rd);
+
+        tcg_temp_free_i32(type_fpr);
+    }
 
     gen_helper_fmax_d(cpu_fpr[a->rd], cpu_env,
                       cpu_fpr[a->rs1], cpu_fpr[a->rs2]);
@@ -536,19 +537,19 @@ static bool trans_fcvt_s_d(DisasContext *ctx, arg_fcvt_s_d *a)
     REQUIRE_FPU;
     REQUIRE_EXT(ctx, RVD);
 
-    TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
-    
-    // Log source: rs1 is an FPR (double)
-    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
-    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_fpr);
-    tcg_temp_free_i32(rs1);
-    
-    // Log destination: rd is an FPR (single)
-    TCGv_i32 rd = tcg_const_i32(a->rd);
-    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_fpr);
-    tcg_temp_free_i32(rd);
-    
-    tcg_temp_free_i32(type_fpr);
+    if (qemu_ctx_logging_full(ctx)) {
+        TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
+
+        TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+        gen_helper_qemu_log_reg_src(cpu_env, rs1, type_fpr);
+        tcg_temp_free_i32(rs1);
+
+        TCGv_i32 rd = tcg_const_i32(a->rd);
+        gen_helper_qemu_log_reg_dst(cpu_env, rd, type_fpr);
+        tcg_temp_free_i32(rd);
+
+        tcg_temp_free_i32(type_fpr);
+    }
 
     gen_set_rm(ctx, a->rm);
     gen_helper_fcvt_s_d(cpu_fpr[a->rd], cpu_env, cpu_fpr[a->rs1]);
@@ -562,19 +563,19 @@ static bool trans_fcvt_d_s(DisasContext *ctx, arg_fcvt_d_s *a)
     REQUIRE_FPU;
     REQUIRE_EXT(ctx, RVD);
 
-    TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
-    
-    // Log source: rs1 is an FPR (single)
-    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
-    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_fpr);
-    tcg_temp_free_i32(rs1);
-    
-    // Log destination: rd is an FPR (double)
-    TCGv_i32 rd = tcg_const_i32(a->rd);
-    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_fpr);
-    tcg_temp_free_i32(rd);
-    
-    tcg_temp_free_i32(type_fpr);
+    if (qemu_ctx_logging_full(ctx)) {
+        TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
+
+        TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+        gen_helper_qemu_log_reg_src(cpu_env, rs1, type_fpr);
+        tcg_temp_free_i32(rs1);
+
+        TCGv_i32 rd = tcg_const_i32(a->rd);
+        gen_helper_qemu_log_reg_dst(cpu_env, rd, type_fpr);
+        tcg_temp_free_i32(rd);
+
+        tcg_temp_free_i32(type_fpr);
+    }
 
     gen_set_rm(ctx, a->rm);
     gen_helper_fcvt_d_s(cpu_fpr[a->rd], cpu_env, cpu_fpr[a->rs1]);
@@ -588,25 +589,25 @@ static bool trans_feq_d(DisasContext *ctx, arg_feq_d *a)
     REQUIRE_FPU;
     REQUIRE_EXT(ctx, RVD);
 
-    TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
-    
-    // Log sources: rs1 and rs2 are FPRs
-    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
-    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_fpr);
-    tcg_temp_free_i32(rs1);
-    
-    TCGv_i32 rs2 = tcg_const_i32(a->rs2);
-    gen_helper_qemu_log_reg_src(cpu_env, rs2, type_fpr);
-    tcg_temp_free_i32(rs2);
-    
-    tcg_temp_free_i32(type_fpr);
-    
-    // Log destination: rd is a GPR
-    TCGv_i32 rd = tcg_const_i32(a->rd);
-    TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
-    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_gpr);
-    tcg_temp_free_i32(rd);
-    tcg_temp_free_i32(type_gpr);
+    if (qemu_ctx_logging_full(ctx)) {
+        TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
+
+        TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+        gen_helper_qemu_log_reg_src(cpu_env, rs1, type_fpr);
+        tcg_temp_free_i32(rs1);
+
+        TCGv_i32 rs2 = tcg_const_i32(a->rs2);
+        gen_helper_qemu_log_reg_src(cpu_env, rs2, type_fpr);
+        tcg_temp_free_i32(rs2);
+
+        tcg_temp_free_i32(type_fpr);
+
+        TCGv_i32 rd = tcg_const_i32(a->rd);
+        TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
+        gen_helper_qemu_log_reg_dst(cpu_env, rd, type_gpr);
+        tcg_temp_free_i32(rd);
+        tcg_temp_free_i32(type_gpr);
+    }
 
     TCGv t0 = tcg_temp_new();
     gen_helper_feq_d(t0, cpu_env, cpu_fpr[a->rs1], cpu_fpr[a->rs2]);
@@ -621,25 +622,25 @@ static bool trans_flt_d(DisasContext *ctx, arg_flt_d *a)
     REQUIRE_FPU;
     REQUIRE_EXT(ctx, RVD);
 
-    TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
-    
-    // Log sources: rs1 and rs2 are FPRs
-    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
-    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_fpr);
-    tcg_temp_free_i32(rs1);
-    
-    TCGv_i32 rs2 = tcg_const_i32(a->rs2);
-    gen_helper_qemu_log_reg_src(cpu_env, rs2, type_fpr);
-    tcg_temp_free_i32(rs2);
-    
-    tcg_temp_free_i32(type_fpr);
-    
-    // Log destination: rd is a GPR
-    TCGv_i32 rd = tcg_const_i32(a->rd);
-    TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
-    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_gpr);
-    tcg_temp_free_i32(rd);
-    tcg_temp_free_i32(type_gpr);
+    if (qemu_ctx_logging_full(ctx)) {
+        TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
+
+        TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+        gen_helper_qemu_log_reg_src(cpu_env, rs1, type_fpr);
+        tcg_temp_free_i32(rs1);
+
+        TCGv_i32 rs2 = tcg_const_i32(a->rs2);
+        gen_helper_qemu_log_reg_src(cpu_env, rs2, type_fpr);
+        tcg_temp_free_i32(rs2);
+
+        tcg_temp_free_i32(type_fpr);
+
+        TCGv_i32 rd = tcg_const_i32(a->rd);
+        TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
+        gen_helper_qemu_log_reg_dst(cpu_env, rd, type_gpr);
+        tcg_temp_free_i32(rd);
+        tcg_temp_free_i32(type_gpr);
+    }
 
     TCGv t0 = tcg_temp_new();
     gen_helper_flt_d(t0, cpu_env, cpu_fpr[a->rs1], cpu_fpr[a->rs2]);
@@ -654,25 +655,25 @@ static bool trans_fle_d(DisasContext *ctx, arg_fle_d *a)
     REQUIRE_FPU;
     REQUIRE_EXT(ctx, RVD);
 
-    TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
-    
-    // Log sources: rs1 and rs2 are FPRs
-    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
-    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_fpr);
-    tcg_temp_free_i32(rs1);
-    
-    TCGv_i32 rs2 = tcg_const_i32(a->rs2);
-    gen_helper_qemu_log_reg_src(cpu_env, rs2, type_fpr);
-    tcg_temp_free_i32(rs2);
-    
-    tcg_temp_free_i32(type_fpr);
-    
-    // Log destination: rd is a GPR
-    TCGv_i32 rd = tcg_const_i32(a->rd);
-    TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
-    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_gpr);
-    tcg_temp_free_i32(rd);
-    tcg_temp_free_i32(type_gpr);
+    if (qemu_ctx_logging_full(ctx)) {
+        TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
+
+        TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+        gen_helper_qemu_log_reg_src(cpu_env, rs1, type_fpr);
+        tcg_temp_free_i32(rs1);
+
+        TCGv_i32 rs2 = tcg_const_i32(a->rs2);
+        gen_helper_qemu_log_reg_src(cpu_env, rs2, type_fpr);
+        tcg_temp_free_i32(rs2);
+
+        tcg_temp_free_i32(type_fpr);
+
+        TCGv_i32 rd = tcg_const_i32(a->rd);
+        TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
+        gen_helper_qemu_log_reg_dst(cpu_env, rd, type_gpr);
+        tcg_temp_free_i32(rd);
+        tcg_temp_free_i32(type_gpr);
+    }
 
     TCGv t0 = tcg_temp_new();
     gen_helper_fle_d(t0, cpu_env, cpu_fpr[a->rs1], cpu_fpr[a->rs2]);
@@ -687,19 +688,19 @@ static bool trans_fclass_d(DisasContext *ctx, arg_fclass_d *a)
     REQUIRE_FPU;
     REQUIRE_EXT(ctx, RVD);
 
-    // Log source: rs1 is an FPR
-    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
-    TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
-    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_fpr);
-    tcg_temp_free_i32(rs1);
-    tcg_temp_free_i32(type_fpr);
-    
-    // Log destination: rd is a GPR
-    TCGv_i32 rd = tcg_const_i32(a->rd);
-    TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
-    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_gpr);
-    tcg_temp_free_i32(rd);
-    tcg_temp_free_i32(type_gpr);
+    if (qemu_ctx_logging_full(ctx)) {
+        TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+        TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
+        gen_helper_qemu_log_reg_src(cpu_env, rs1, type_fpr);
+        tcg_temp_free_i32(rs1);
+        tcg_temp_free_i32(type_fpr);
+
+        TCGv_i32 rd = tcg_const_i32(a->rd);
+        TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
+        gen_helper_qemu_log_reg_dst(cpu_env, rd, type_gpr);
+        tcg_temp_free_i32(rd);
+        tcg_temp_free_i32(type_gpr);
+    }
 
     TCGv t0 = tcg_temp_new();
     gen_helper_fclass_d(t0, cpu_fpr[a->rs1]);
@@ -713,19 +714,19 @@ static bool trans_fcvt_w_d(DisasContext *ctx, arg_fcvt_w_d *a)
     REQUIRE_FPU;
     REQUIRE_EXT(ctx, RVD);
 
-    // Log source: rs1 is an FPR
-    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
-    TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
-    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_fpr);
-    tcg_temp_free_i32(rs1);
-    tcg_temp_free_i32(type_fpr);
-    
-    // Log destination: rd is a GPR
-    TCGv_i32 rd = tcg_const_i32(a->rd);
-    TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
-    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_gpr);
-    tcg_temp_free_i32(rd);
-    tcg_temp_free_i32(type_gpr);
+    if (qemu_ctx_logging_full(ctx)) {
+        TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+        TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
+        gen_helper_qemu_log_reg_src(cpu_env, rs1, type_fpr);
+        tcg_temp_free_i32(rs1);
+        tcg_temp_free_i32(type_fpr);
+
+        TCGv_i32 rd = tcg_const_i32(a->rd);
+        TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
+        gen_helper_qemu_log_reg_dst(cpu_env, rd, type_gpr);
+        tcg_temp_free_i32(rd);
+        tcg_temp_free_i32(type_gpr);
+    }
 
     TCGv t0 = tcg_temp_new();
     gen_set_rm(ctx, a->rm);
@@ -741,19 +742,19 @@ static bool trans_fcvt_wu_d(DisasContext *ctx, arg_fcvt_wu_d *a)
     REQUIRE_FPU;
     REQUIRE_EXT(ctx, RVD);
 
-    // Log source: rs1 is an FPR
-    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
-    TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
-    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_fpr);
-    tcg_temp_free_i32(rs1);
-    tcg_temp_free_i32(type_fpr);
-    
-    // Log destination: rd is a GPR
-    TCGv_i32 rd = tcg_const_i32(a->rd);
-    TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
-    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_gpr);
-    tcg_temp_free_i32(rd);
-    tcg_temp_free_i32(type_gpr);
+    if (qemu_ctx_logging_full(ctx)) {
+        TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+        TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
+        gen_helper_qemu_log_reg_src(cpu_env, rs1, type_fpr);
+        tcg_temp_free_i32(rs1);
+        tcg_temp_free_i32(type_fpr);
+
+        TCGv_i32 rd = tcg_const_i32(a->rd);
+        TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
+        gen_helper_qemu_log_reg_dst(cpu_env, rd, type_gpr);
+        tcg_temp_free_i32(rd);
+        tcg_temp_free_i32(type_gpr);
+    }
 
     TCGv t0 = tcg_temp_new();
     gen_set_rm(ctx, a->rm);
@@ -769,19 +770,19 @@ static bool trans_fcvt_d_w(DisasContext *ctx, arg_fcvt_d_w *a)
     REQUIRE_FPU;
     REQUIRE_EXT(ctx, RVD);
 
-    // Log source: rs1 is a GPR
-    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
-    TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
-    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_gpr);
-    tcg_temp_free_i32(rs1);
-    tcg_temp_free_i32(type_gpr);
-    
-    // Log destination: rd is an FPR
-    TCGv_i32 rd = tcg_const_i32(a->rd);
-    TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
-    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_fpr);
-    tcg_temp_free_i32(rd);
-    tcg_temp_free_i32(type_fpr);
+    if (qemu_ctx_logging_full(ctx)) {
+        TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+        TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
+        gen_helper_qemu_log_reg_src(cpu_env, rs1, type_gpr);
+        tcg_temp_free_i32(rs1);
+        tcg_temp_free_i32(type_gpr);
+
+        TCGv_i32 rd = tcg_const_i32(a->rd);
+        TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
+        gen_helper_qemu_log_reg_dst(cpu_env, rd, type_fpr);
+        tcg_temp_free_i32(rd);
+        tcg_temp_free_i32(type_fpr);
+    }
 
     TCGv t0 = tcg_temp_new();
     gen_get_gpr(t0, a->rs1);
@@ -799,19 +800,19 @@ static bool trans_fcvt_d_wu(DisasContext *ctx, arg_fcvt_d_wu *a)
     REQUIRE_FPU;
     REQUIRE_EXT(ctx, RVD);
 
-    // Log source: rs1 is a GPR
-    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
-    TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
-    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_gpr);
-    tcg_temp_free_i32(rs1);
-    tcg_temp_free_i32(type_gpr);
-    
-    // Log destination: rd is an FPR
-    TCGv_i32 rd = tcg_const_i32(a->rd);
-    TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
-    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_fpr);
-    tcg_temp_free_i32(rd);
-    tcg_temp_free_i32(type_fpr);
+    if (qemu_ctx_logging_full(ctx)) {
+        TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+        TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
+        gen_helper_qemu_log_reg_src(cpu_env, rs1, type_gpr);
+        tcg_temp_free_i32(rs1);
+        tcg_temp_free_i32(type_gpr);
+
+        TCGv_i32 rd = tcg_const_i32(a->rd);
+        TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
+        gen_helper_qemu_log_reg_dst(cpu_env, rd, type_fpr);
+        tcg_temp_free_i32(rd);
+        tcg_temp_free_i32(type_fpr);
+    }
 
     TCGv t0 = tcg_temp_new();
     gen_get_gpr(t0, a->rs1);
@@ -831,19 +832,19 @@ static bool trans_fcvt_l_d(DisasContext *ctx, arg_fcvt_l_d *a)
     REQUIRE_FPU;
     REQUIRE_EXT(ctx, RVD);
 
-    // Log source: rs1 is an FPR
-    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
-    TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
-    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_fpr);
-    tcg_temp_free_i32(rs1);
-    tcg_temp_free_i32(type_fpr);
-    
-    // Log destination: rd is a GPR
-    TCGv_i32 rd = tcg_const_i32(a->rd);
-    TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
-    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_gpr);
-    tcg_temp_free_i32(rd);
-    tcg_temp_free_i32(type_gpr);
+    if (qemu_ctx_logging_full(ctx)) {
+        TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+        TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
+        gen_helper_qemu_log_reg_src(cpu_env, rs1, type_fpr);
+        tcg_temp_free_i32(rs1);
+        tcg_temp_free_i32(type_fpr);
+
+        TCGv_i32 rd = tcg_const_i32(a->rd);
+        TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
+        gen_helper_qemu_log_reg_dst(cpu_env, rd, type_gpr);
+        tcg_temp_free_i32(rd);
+        tcg_temp_free_i32(type_gpr);
+    }
 
     TCGv t0 = tcg_temp_new();
     gen_set_rm(ctx, a->rm);
@@ -858,19 +859,19 @@ static bool trans_fcvt_lu_d(DisasContext *ctx, arg_fcvt_lu_d *a)
     REQUIRE_FPU;
     REQUIRE_EXT(ctx, RVD);
 
-    // Log source: rs1 is an FPR
-    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
-    TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
-    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_fpr);
-    tcg_temp_free_i32(rs1);
-    tcg_temp_free_i32(type_fpr);
-    
-    // Log destination: rd is a GPR
-    TCGv_i32 rd = tcg_const_i32(a->rd);
-    TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
-    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_gpr);
-    tcg_temp_free_i32(rd);
-    tcg_temp_free_i32(type_gpr);
+    if (qemu_ctx_logging_full(ctx)) {
+        TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+        TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
+        gen_helper_qemu_log_reg_src(cpu_env, rs1, type_fpr);
+        tcg_temp_free_i32(rs1);
+        tcg_temp_free_i32(type_fpr);
+
+        TCGv_i32 rd = tcg_const_i32(a->rd);
+        TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
+        gen_helper_qemu_log_reg_dst(cpu_env, rd, type_gpr);
+        tcg_temp_free_i32(rd);
+        tcg_temp_free_i32(type_gpr);
+    }
 
     TCGv t0 = tcg_temp_new();
     gen_set_rm(ctx, a->rm);
@@ -885,19 +886,19 @@ static bool trans_fmv_x_d(DisasContext *ctx, arg_fmv_x_d *a)
     REQUIRE_FPU;
     REQUIRE_EXT(ctx, RVD);
 
-    // Log source: rs1 is an FPR
-    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
-    TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
-    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_fpr);
-    tcg_temp_free_i32(rs1);
-    tcg_temp_free_i32(type_fpr);
-    
-    // Log destination: rd is a GPR
-    TCGv_i32 rd = tcg_const_i32(a->rd);
-    TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
-    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_gpr);
-    tcg_temp_free_i32(rd);
-    tcg_temp_free_i32(type_gpr);
+    if (qemu_ctx_logging_full(ctx)) {
+        TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+        TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
+        gen_helper_qemu_log_reg_src(cpu_env, rs1, type_fpr);
+        tcg_temp_free_i32(rs1);
+        tcg_temp_free_i32(type_fpr);
+
+        TCGv_i32 rd = tcg_const_i32(a->rd);
+        TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
+        gen_helper_qemu_log_reg_dst(cpu_env, rd, type_gpr);
+        tcg_temp_free_i32(rd);
+        tcg_temp_free_i32(type_gpr);
+    }
 
     gen_set_gpr(a->rd, cpu_fpr[a->rs1]);
     return true;
@@ -908,19 +909,19 @@ static bool trans_fcvt_d_l(DisasContext *ctx, arg_fcvt_d_l *a)
     REQUIRE_FPU;
     REQUIRE_EXT(ctx, RVD);
 
-    // Log source: rs1 is a GPR
-    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
-    TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
-    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_gpr);
-    tcg_temp_free_i32(rs1);
-    tcg_temp_free_i32(type_gpr);
-    
-    // Log destination: rd is an FPR
-    TCGv_i32 rd = tcg_const_i32(a->rd);
-    TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
-    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_fpr);
-    tcg_temp_free_i32(rd);
-    tcg_temp_free_i32(type_fpr);
+    if (qemu_ctx_logging_full(ctx)) {
+        TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+        TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
+        gen_helper_qemu_log_reg_src(cpu_env, rs1, type_gpr);
+        tcg_temp_free_i32(rs1);
+        tcg_temp_free_i32(type_gpr);
+
+        TCGv_i32 rd = tcg_const_i32(a->rd);
+        TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
+        gen_helper_qemu_log_reg_dst(cpu_env, rd, type_fpr);
+        tcg_temp_free_i32(rd);
+        tcg_temp_free_i32(type_fpr);
+    }
 
     TCGv t0 = tcg_temp_new();
     gen_get_gpr(t0, a->rs1);
@@ -937,19 +938,19 @@ static bool trans_fcvt_d_lu(DisasContext *ctx, arg_fcvt_d_lu *a)
     REQUIRE_FPU;
     REQUIRE_EXT(ctx, RVD);
 
-    // Log source: rs1 is a GPR
-    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
-    TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
-    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_gpr);
-    tcg_temp_free_i32(rs1);
-    tcg_temp_free_i32(type_gpr);
-    
-    // Log destination: rd is an FPR
-    TCGv_i32 rd = tcg_const_i32(a->rd);
-    TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
-    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_fpr);
-    tcg_temp_free_i32(rd);
-    tcg_temp_free_i32(type_fpr);
+    if (qemu_ctx_logging_full(ctx)) {
+        TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+        TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
+        gen_helper_qemu_log_reg_src(cpu_env, rs1, type_gpr);
+        tcg_temp_free_i32(rs1);
+        tcg_temp_free_i32(type_gpr);
+
+        TCGv_i32 rd = tcg_const_i32(a->rd);
+        TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
+        gen_helper_qemu_log_reg_dst(cpu_env, rd, type_fpr);
+        tcg_temp_free_i32(rd);
+        tcg_temp_free_i32(type_fpr);
+    }
 
     TCGv t0 = tcg_temp_new();
     gen_get_gpr(t0, a->rs1);
@@ -966,19 +967,19 @@ static bool trans_fmv_d_x(DisasContext *ctx, arg_fmv_d_x *a)
     REQUIRE_FPU;
     REQUIRE_EXT(ctx, RVD);
 
-    // Log source: rs1 is a GPR
-    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
-    TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
-    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_gpr);
-    tcg_temp_free_i32(rs1);
-    tcg_temp_free_i32(type_gpr);
-    
-    // Log destination: rd is an FPR
-    TCGv_i32 rd = tcg_const_i32(a->rd);
-    TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
-    gen_helper_qemu_log_reg_dst(cpu_env, rd, type_fpr);
-    tcg_temp_free_i32(rd);
-    tcg_temp_free_i32(type_fpr);
+    if (qemu_ctx_logging_full(ctx)) {
+        TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+        TCGv_i32 type_gpr = tcg_const_i32(LOG_REG_TYPE_GPR);
+        gen_helper_qemu_log_reg_src(cpu_env, rs1, type_gpr);
+        tcg_temp_free_i32(rs1);
+        tcg_temp_free_i32(type_gpr);
+
+        TCGv_i32 rd = tcg_const_i32(a->rd);
+        TCGv_i32 type_fpr = tcg_const_i32(LOG_REG_TYPE_FPR);
+        gen_helper_qemu_log_reg_dst(cpu_env, rd, type_fpr);
+        tcg_temp_free_i32(rd);
+        tcg_temp_free_i32(type_fpr);
+    }
 
     TCGv t0 = tcg_temp_new();
     gen_get_gpr(t0, a->rs1);

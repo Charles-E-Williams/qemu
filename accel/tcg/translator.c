@@ -47,6 +47,9 @@ void translator_loop(const TranslatorOps *ops, DisasContextBase *db,
      * log level changes.
      */
     const bool log_instr_enabled = qemu_log_instr_enabled(cpu->env_ptr);
+    const log_instr_mode_t log_mode = log_instr_enabled
+        ? qemu_log_instr_get_mode(cpu->env_ptr)
+        : LOG_MODE_ALL;
 #endif
 
     /* Initialize DisasContext */
@@ -77,6 +80,7 @@ void translator_loop(const TranslatorOps *ops, DisasContextBase *db,
      * log level changes.
      */
     db->log_instr_enabled = log_instr_enabled;
+    db->log_instr_mode = log_mode;
 #endif /* CONFIG_TCG_LOG_INSTR */
 
     /* Reset the temp count so that we can identify leaks */
@@ -94,7 +98,9 @@ void translator_loop(const TranslatorOps *ops, DisasContextBase *db,
 #ifdef CONFIG_TCG_LOG_INSTR
     /* Commit previous instruction */
     if (unlikely(log_instr_enabled)) {
-        qemu_log_gen_printf_flush(db, true, true);
+        if (log_mode == LOG_MODE_ALL)
+            qemu_log_gen_printf_flush(db, true, true);
+
         gen_helper_qemu_log_instr_commit(cpu_env);
     }
 #endif
@@ -191,7 +197,8 @@ void translator_loop(const TranslatorOps *ops, DisasContextBase *db,
              * TODO: As long as the string stays around, we could delay this
              * till the end of a BB.
              */
-            qemu_log_gen_printf_flush(db, true, false);
+            if (log_mode == LOG_MODE_ALL)
+                qemu_log_gen_printf_flush(db, true, false);
             gen_helper_qemu_log_instr_commit(cpu_env);
         }
 #endif
@@ -202,7 +209,7 @@ void translator_loop(const TranslatorOps *ops, DisasContextBase *db,
      * Flush buffers for last instruction. Committing itself is done in the
      * next TB in order to capture results of exception handling.
      */
-    if (unlikely(log_instr_enabled)) {
+    if (unlikely(log_instr_enabled) &&  log_mode == LOG_MODE_ALL) {
         qemu_log_gen_printf_flush(db, true, false);
     }
 #endif

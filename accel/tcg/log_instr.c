@@ -105,6 +105,9 @@ extern uint64_t WARMUP_INTERVAL;
 extern uint64_t START_PC; 
 static GHashTable *pc_exec_count_map = NULL;
 
+bool log_instr_suppress_mem = false;
+bool log_instr_fast_forward = false; 
+
 /*
  * Instruction log info associated with each committed log entry.
  * This is stored in the per-cpu log cpustate.
@@ -1410,8 +1413,22 @@ static void simpoint_end(CPUArchState *env, int last_idx)
     sp_state.tracing    = false;
     sp_state.in_warmup  = false;
 
-    if (sp_state.current_idx == last_idx)
+    if (sp_state.current_idx == last_idx) {
         sp_state.stop = true;
+        log_instr_fast_forward = true;
+        log_instr_suppress_mem = true;
+        cpu_log_instr_state_t *cpulog = get_cpu_log_state(env);
+        cpulog->loglevel = QEMU_LOG_INSTR_LOGLEVEL_NONE;
+        cpulog->loglevel_active = false;
+        tb_flush(env_cpu(env));
+        cpu_loop_exit(env_cpu(env));
+    } else {
+        if (trace_format != &trace_formats[4]) {
+            log_instr_suppress_mem = true;
+            log_instr_fast_forward = true;
+        }
+        tb_flush(env_cpu(env));
+    }
 
     sp_state.current_idx = -1;
 }
@@ -1473,6 +1490,9 @@ static bool handle_interval_simpoints(CPUArchState *env,
             sp_state.tracing     = true;
             sp_state.in_warmup   = m.is_warmup;
             sp_state.current_idx = m.idx;
+            log_instr_suppress_mem = false;
+            log_instr_fast_forward = false;
+            tb_flush(env_cpu(env));
 
         } else if (m.idx != sp_state.current_idx) {
             /* Switching between adjacent/overlapping simpoints */
@@ -1587,8 +1607,25 @@ static void emit_with_dfilter(CPUArchState *env, cpu_log_instr_info_t *iinfo)
 /* Common instruction commit implementation */
 static void do_instr_commit(CPUArchState *env)
 {
+
     cpu_log_instr_state_t *cpulog = get_cpu_log_state(env);
     cpu_log_instr_info_t *iinfo = get_cpu_log_instr_info(env);
+
+
+    /* Fast path for inter-simpoint fast-forward */
+    if (log_instr_fast_forward) {
+        if (simpoint_pcs)
+            handle_pc_simpoints(env, cpulog, iinfo);
+        else if (simpoints)
+            handle_interval_simpoints(env, iinfo);
+
+        /* Minimal reset */
+        if (iinfo->mem->len > 0)
+            g_array_set_size(iinfo->mem, 0);
+        iinfo->num_src_regs = 0;
+        iinfo->num_dst_regs = 0;
+        return;
+    }
 
     log_assert(cpulog != NULL && "Invalid log state");
     log_assert(iinfo != NULL && "Invalid log info");
@@ -1609,6 +1646,7 @@ static void do_instr_commit(CPUArchState *env)
     if (START_PC != 0 && !sp_state.started) {
         if (iinfo->pc == START_PC) {
             sp_state.started = true;
+            log_instr_fast_forward = true;
             fprintf(stderr, "Started tracing at start_pc: 0x%lx\n", START_PC);
         } else {
             return;
@@ -1892,6 +1930,22 @@ bool qemu_log_instr_check_enabled(CPUArchState *env)
             get_cpu_log_state(env)->loglevel_active);
 }
 
+log_instr_mode_t qemu_log_instr_get_mode(CPUArchState *env)
+{
+    if (!qemu_loglevel_mask(CPU_LOG_INSTR) || !get_cpu_log_state(env)->loglevel_active)
+        return LOG_MODE_ALL;
+
+    if (simpoints || simpoint_pcs) {
+        if (sp_state.tracing)
+            return LOG_MODE_ALL;   /* inside simpoint: full instrumentation */
+        if (trace_format == &trace_formats[4])
+            return LOG_MODE_MEM;   /* ChampSimCheri between simpoints */
+        else
+            return LOG_MODE_COUNT; /* ChampSim between simpoints */
+    }
+
+    return LOG_MODE_ALL;  /* no simpoints configured, default to full */
+}
 /*
  * Record a change in CPU mode.
  * Any instruction calling this should exit the TB.
@@ -2670,6 +2724,8 @@ void helper_qemu_log_instr_commit(CPUArchState *env)
 void helper_qemu_log_instr_load64(CPUArchState *env, target_ulong addr,
                                   uint64_t value, TCGMemOpIdx oi)
 {
+    if (log_instr_fast_forward)
+        return;
     if (qemu_log_instr_enabled(env))
         qemu_log_instr_mem_int(env, addr, LMI_LD, oi, value);
 }
@@ -2684,6 +2740,8 @@ void helper_qemu_log_instr_store64(CPUArchState *env, target_ulong addr,
 void helper_qemu_log_instr_load32(CPUArchState *env, target_ulong addr,
                                   uint32_t value, TCGMemOpIdx oi)
 {
+    if (log_instr_fast_forward)
+        return;
     if (qemu_log_instr_enabled(env))
         qemu_log_instr_mem_int(env, addr, LMI_LD, oi, (uint64_t)value);
 }

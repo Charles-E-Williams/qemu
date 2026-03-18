@@ -76,9 +76,14 @@
 #ifdef CONFIG_TCG_LOG_INSTR
 #define qemu_ctx_logging_enabled(ctx) unlikely(ctx->base.log_instr_enabled)
 #define qemu_base_logging_enabled(base) unlikely(base->log_instr_enabled)
+#define qemu_ctx_logging_full(ctx) \
+    (qemu_ctx_logging_enabled(ctx) && \
+     ctx->base.log_instr_mode == LOG_MODE_ALL)
+extern bool log_instr_fast_forward;
 #else
 #define qemu_ctx_logging_enabled(ctx) false
 #define qemu_base_logging_enabled(base) false
+#define log_instr_fast_forward false
 #endif
 
 /*
@@ -198,6 +203,10 @@ void qemu_log_instr_flush_tcg(bool request_stop);
  */
 bool qemu_log_instr_check_enabled(CPUArchState *env);
 
+/*
+ * Check which instruction tracing mode we're using
+ */
+log_instr_mode_t qemu_log_instr_get_mode(CPUArchState *env);
 /*
  * Start instruction tracing. Note that the instruction currently being
  * executed will be replaced by a trace start event.

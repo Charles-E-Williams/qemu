@@ -22,21 +22,23 @@
 static bool trans_mul(DisasContext *ctx, arg_mul *a)
 {
     REQUIRE_EXT(ctx, RVM);
-    
-    TCGv_i32 rs1_id = tcg_const_i32(a->rs1);
-    TCGv_i32 rs2_id = tcg_const_i32(a->rs2);
-    TCGv_i32 rd_id = tcg_const_i32(a->rd);
-    TCGv_i32 reg_type = tcg_const_i32(LOG_REG_TYPE_GPR);
-    
-    gen_helper_qemu_log_reg_src(cpu_env, rs1_id, reg_type);
-    gen_helper_qemu_log_reg_src(cpu_env, rs2_id, reg_type);
-    gen_helper_qemu_log_reg_dst(cpu_env, rd_id, reg_type);
-    
-    tcg_temp_free_i32(rs1_id);
-    tcg_temp_free_i32(rs2_id);
-    tcg_temp_free_i32(rd_id);
-    tcg_temp_free_i32(reg_type);
-    
+
+    if (qemu_ctx_logging_full(ctx)) {
+        TCGv_i32 rs1_id = tcg_const_i32(a->rs1);
+        TCGv_i32 rs2_id = tcg_const_i32(a->rs2);
+        TCGv_i32 rd_id = tcg_const_i32(a->rd);
+        TCGv_i32 reg_type = tcg_const_i32(LOG_REG_TYPE_GPR);
+
+        gen_helper_qemu_log_reg_src(cpu_env, rs1_id, reg_type);
+        gen_helper_qemu_log_reg_src(cpu_env, rs2_id, reg_type);
+        gen_helper_qemu_log_reg_dst(cpu_env, rd_id, reg_type);
+
+        tcg_temp_free_i32(rs1_id);
+        tcg_temp_free_i32(rs2_id);
+        tcg_temp_free_i32(rd_id);
+        tcg_temp_free_i32(reg_type);
+    }
+
     return gen_arith(ctx, a, &tcg_gen_mul_tl);
 }
 
@@ -44,19 +46,21 @@ static bool trans_mulh(DisasContext *ctx, arg_mulh *a)
 {
     REQUIRE_EXT(ctx, RVM);
 
-    TCGv_i32 rs1_id = tcg_const_i32(a->rs1);
-    TCGv_i32 rs2_id = tcg_const_i32(a->rs2);
-    TCGv_i32 rd_id = tcg_const_i32(a->rd);
-    TCGv_i32 reg_type = tcg_const_i32(LOG_REG_TYPE_GPR);
-    
-    gen_helper_qemu_log_reg_src(cpu_env, rs1_id, reg_type);
-    gen_helper_qemu_log_reg_src(cpu_env, rs2_id, reg_type);
-    gen_helper_qemu_log_reg_dst(cpu_env, rd_id, reg_type);
-    
-    tcg_temp_free_i32(rs1_id);
-    tcg_temp_free_i32(rs2_id);
-    tcg_temp_free_i32(rd_id);
-    tcg_temp_free_i32(reg_type);
+    if (qemu_ctx_logging_full(ctx)) {
+        TCGv_i32 rs1_id = tcg_const_i32(a->rs1);
+        TCGv_i32 rs2_id = tcg_const_i32(a->rs2);
+        TCGv_i32 rd_id = tcg_const_i32(a->rd);
+        TCGv_i32 reg_type = tcg_const_i32(LOG_REG_TYPE_GPR);
+
+        gen_helper_qemu_log_reg_src(cpu_env, rs1_id, reg_type);
+        gen_helper_qemu_log_reg_src(cpu_env, rs2_id, reg_type);
+        gen_helper_qemu_log_reg_dst(cpu_env, rd_id, reg_type);
+
+        tcg_temp_free_i32(rs1_id);
+        tcg_temp_free_i32(rs2_id);
+        tcg_temp_free_i32(rd_id);
+        tcg_temp_free_i32(reg_type);
+    }
 
     TCGv source1 = tcg_temp_new();
     TCGv source2 = tcg_temp_new();
@@ -74,21 +78,23 @@ static bool trans_mulh(DisasContext *ctx, arg_mulh *a)
 static bool trans_mulhsu(DisasContext *ctx, arg_mulhsu *a)
 {
     REQUIRE_EXT(ctx, RVM);
-    
-    TCGv_i32 rs1_id = tcg_const_i32(a->rs1);
-    TCGv_i32 rs2_id = tcg_const_i32(a->rs2);
-    TCGv_i32 rd_id = tcg_const_i32(a->rd);
-    TCGv_i32 reg_type = tcg_const_i32(LOG_REG_TYPE_GPR);
-    
-    gen_helper_qemu_log_reg_src(cpu_env, rs1_id, reg_type);
-    gen_helper_qemu_log_reg_src(cpu_env, rs2_id, reg_type);
-    gen_helper_qemu_log_reg_dst(cpu_env, rd_id, reg_type);
-    
-    tcg_temp_free_i32(rs1_id);
-    tcg_temp_free_i32(rs2_id);
-    tcg_temp_free_i32(rd_id);
-    tcg_temp_free_i32(reg_type);
-    
+
+    if (qemu_ctx_logging_full(ctx)) {
+        TCGv_i32 rs1_id = tcg_const_i32(a->rs1);
+        TCGv_i32 rs2_id = tcg_const_i32(a->rs2);
+        TCGv_i32 rd_id = tcg_const_i32(a->rd);
+        TCGv_i32 reg_type = tcg_const_i32(LOG_REG_TYPE_GPR);
+
+        gen_helper_qemu_log_reg_src(cpu_env, rs1_id, reg_type);
+        gen_helper_qemu_log_reg_src(cpu_env, rs2_id, reg_type);
+        gen_helper_qemu_log_reg_dst(cpu_env, rd_id, reg_type);
+
+        tcg_temp_free_i32(rs1_id);
+        tcg_temp_free_i32(rs2_id);
+        tcg_temp_free_i32(rd_id);
+        tcg_temp_free_i32(reg_type);
+    }
+
     return gen_arith(ctx, a, &gen_mulhsu);
 }
 
@@ -96,19 +102,21 @@ static bool trans_mulhu(DisasContext *ctx, arg_mulhu *a)
 {
     REQUIRE_EXT(ctx, RVM);
 
-    TCGv_i32 rs1_id = tcg_const_i32(a->rs1);
-    TCGv_i32 rs2_id = tcg_const_i32(a->rs2);
-    TCGv_i32 rd_id = tcg_const_i32(a->rd);
-    TCGv_i32 reg_type = tcg_const_i32(LOG_REG_TYPE_GPR);
-    
-    gen_helper_qemu_log_reg_src(cpu_env, rs1_id, reg_type);
-    gen_helper_qemu_log_reg_src(cpu_env, rs2_id, reg_type);
-    gen_helper_qemu_log_reg_dst(cpu_env, rd_id, reg_type);
-    
-    tcg_temp_free_i32(rs1_id);
-    tcg_temp_free_i32(rs2_id);
-    tcg_temp_free_i32(rd_id);
-    tcg_temp_free_i32(reg_type);
+    if (qemu_ctx_logging_full(ctx)) {
+        TCGv_i32 rs1_id = tcg_const_i32(a->rs1);
+        TCGv_i32 rs2_id = tcg_const_i32(a->rs2);
+        TCGv_i32 rd_id = tcg_const_i32(a->rd);
+        TCGv_i32 reg_type = tcg_const_i32(LOG_REG_TYPE_GPR);
+
+        gen_helper_qemu_log_reg_src(cpu_env, rs1_id, reg_type);
+        gen_helper_qemu_log_reg_src(cpu_env, rs2_id, reg_type);
+        gen_helper_qemu_log_reg_dst(cpu_env, rd_id, reg_type);
+
+        tcg_temp_free_i32(rs1_id);
+        tcg_temp_free_i32(rs2_id);
+        tcg_temp_free_i32(rd_id);
+        tcg_temp_free_i32(reg_type);
+    }
 
     TCGv source1 = tcg_temp_new();
     TCGv source2 = tcg_temp_new();
@@ -126,84 +134,92 @@ static bool trans_mulhu(DisasContext *ctx, arg_mulhu *a)
 static bool trans_div(DisasContext *ctx, arg_div *a)
 {
     REQUIRE_EXT(ctx, RVM);
-    
-    TCGv_i32 rs1_id = tcg_const_i32(a->rs1);
-    TCGv_i32 rs2_id = tcg_const_i32(a->rs2);
-    TCGv_i32 rd_id = tcg_const_i32(a->rd);
-    TCGv_i32 reg_type = tcg_const_i32(LOG_REG_TYPE_GPR);
-    
-    gen_helper_qemu_log_reg_src(cpu_env, rs1_id, reg_type);
-    gen_helper_qemu_log_reg_src(cpu_env, rs2_id, reg_type);
-    gen_helper_qemu_log_reg_dst(cpu_env, rd_id, reg_type);
-    
-    tcg_temp_free_i32(rs1_id);
-    tcg_temp_free_i32(rs2_id);
-    tcg_temp_free_i32(rd_id);
-    tcg_temp_free_i32(reg_type);
-    
+
+    if (qemu_ctx_logging_full(ctx)) {
+        TCGv_i32 rs1_id = tcg_const_i32(a->rs1);
+        TCGv_i32 rs2_id = tcg_const_i32(a->rs2);
+        TCGv_i32 rd_id = tcg_const_i32(a->rd);
+        TCGv_i32 reg_type = tcg_const_i32(LOG_REG_TYPE_GPR);
+
+        gen_helper_qemu_log_reg_src(cpu_env, rs1_id, reg_type);
+        gen_helper_qemu_log_reg_src(cpu_env, rs2_id, reg_type);
+        gen_helper_qemu_log_reg_dst(cpu_env, rd_id, reg_type);
+
+        tcg_temp_free_i32(rs1_id);
+        tcg_temp_free_i32(rs2_id);
+        tcg_temp_free_i32(rd_id);
+        tcg_temp_free_i32(reg_type);
+    }
+
     return gen_arith(ctx, a, &gen_div);
 }
 
 static bool trans_divu(DisasContext *ctx, arg_divu *a)
 {
     REQUIRE_EXT(ctx, RVM);
-    
-    TCGv_i32 rs1_id = tcg_const_i32(a->rs1);
-    TCGv_i32 rs2_id = tcg_const_i32(a->rs2);
-    TCGv_i32 rd_id = tcg_const_i32(a->rd);
-    TCGv_i32 reg_type = tcg_const_i32(LOG_REG_TYPE_GPR);
-    
-    gen_helper_qemu_log_reg_src(cpu_env, rs1_id, reg_type);
-    gen_helper_qemu_log_reg_src(cpu_env, rs2_id, reg_type);
-    gen_helper_qemu_log_reg_dst(cpu_env, rd_id, reg_type);
-    
-    tcg_temp_free_i32(rs1_id);
-    tcg_temp_free_i32(rs2_id);
-    tcg_temp_free_i32(rd_id);
-    tcg_temp_free_i32(reg_type);
-    
+
+    if (qemu_ctx_logging_full(ctx)) {
+        TCGv_i32 rs1_id = tcg_const_i32(a->rs1);
+        TCGv_i32 rs2_id = tcg_const_i32(a->rs2);
+        TCGv_i32 rd_id = tcg_const_i32(a->rd);
+        TCGv_i32 reg_type = tcg_const_i32(LOG_REG_TYPE_GPR);
+
+        gen_helper_qemu_log_reg_src(cpu_env, rs1_id, reg_type);
+        gen_helper_qemu_log_reg_src(cpu_env, rs2_id, reg_type);
+        gen_helper_qemu_log_reg_dst(cpu_env, rd_id, reg_type);
+
+        tcg_temp_free_i32(rs1_id);
+        tcg_temp_free_i32(rs2_id);
+        tcg_temp_free_i32(rd_id);
+        tcg_temp_free_i32(reg_type);
+    }
+
     return gen_arith(ctx, a, &gen_divu);
 }
 
 static bool trans_rem(DisasContext *ctx, arg_rem *a)
 {
     REQUIRE_EXT(ctx, RVM);
-    
-    TCGv_i32 rs1_id = tcg_const_i32(a->rs1);
-    TCGv_i32 rs2_id = tcg_const_i32(a->rs2);
-    TCGv_i32 rd_id = tcg_const_i32(a->rd);
-    TCGv_i32 reg_type = tcg_const_i32(LOG_REG_TYPE_GPR);
-    
-    gen_helper_qemu_log_reg_src(cpu_env, rs1_id, reg_type);
-    gen_helper_qemu_log_reg_src(cpu_env, rs2_id, reg_type);
-    gen_helper_qemu_log_reg_dst(cpu_env, rd_id, reg_type);
-    
-    tcg_temp_free_i32(rs1_id);
-    tcg_temp_free_i32(rs2_id);
-    tcg_temp_free_i32(rd_id);
-    tcg_temp_free_i32(reg_type);
-    
+
+    if (qemu_ctx_logging_full(ctx)) {
+        TCGv_i32 rs1_id = tcg_const_i32(a->rs1);
+        TCGv_i32 rs2_id = tcg_const_i32(a->rs2);
+        TCGv_i32 rd_id = tcg_const_i32(a->rd);
+        TCGv_i32 reg_type = tcg_const_i32(LOG_REG_TYPE_GPR);
+
+        gen_helper_qemu_log_reg_src(cpu_env, rs1_id, reg_type);
+        gen_helper_qemu_log_reg_src(cpu_env, rs2_id, reg_type);
+        gen_helper_qemu_log_reg_dst(cpu_env, rd_id, reg_type);
+
+        tcg_temp_free_i32(rs1_id);
+        tcg_temp_free_i32(rs2_id);
+        tcg_temp_free_i32(rd_id);
+        tcg_temp_free_i32(reg_type);
+    }
+
     return gen_arith(ctx, a, &gen_rem);
 }
 
 static bool trans_remu(DisasContext *ctx, arg_remu *a)
 {
     REQUIRE_EXT(ctx, RVM);
-    
-    TCGv_i32 rs1_id = tcg_const_i32(a->rs1);
-    TCGv_i32 rs2_id = tcg_const_i32(a->rs2);
-    TCGv_i32 rd_id = tcg_const_i32(a->rd);
-    TCGv_i32 reg_type = tcg_const_i32(LOG_REG_TYPE_GPR);
-    
-    gen_helper_qemu_log_reg_src(cpu_env, rs1_id, reg_type);
-    gen_helper_qemu_log_reg_src(cpu_env, rs2_id, reg_type);
-    gen_helper_qemu_log_reg_dst(cpu_env, rd_id, reg_type);
-    
-    tcg_temp_free_i32(rs1_id);
-    tcg_temp_free_i32(rs2_id);
-    tcg_temp_free_i32(rd_id);
-    tcg_temp_free_i32(reg_type);
-    
+
+    if (qemu_ctx_logging_full(ctx)) {
+        TCGv_i32 rs1_id = tcg_const_i32(a->rs1);
+        TCGv_i32 rs2_id = tcg_const_i32(a->rs2);
+        TCGv_i32 rd_id = tcg_const_i32(a->rd);
+        TCGv_i32 reg_type = tcg_const_i32(LOG_REG_TYPE_GPR);
+
+        gen_helper_qemu_log_reg_src(cpu_env, rs1_id, reg_type);
+        gen_helper_qemu_log_reg_src(cpu_env, rs2_id, reg_type);
+        gen_helper_qemu_log_reg_dst(cpu_env, rd_id, reg_type);
+
+        tcg_temp_free_i32(rs1_id);
+        tcg_temp_free_i32(rs2_id);
+        tcg_temp_free_i32(rd_id);
+        tcg_temp_free_i32(reg_type);
+    }
+
     return gen_arith(ctx, a, &gen_remu);
 }
 
@@ -211,105 +227,115 @@ static bool trans_remu(DisasContext *ctx, arg_remu *a)
 static bool trans_mulw(DisasContext *ctx, arg_mulw *a)
 {
     REQUIRE_EXT(ctx, RVM);
-    
-    TCGv_i32 rs1_id = tcg_const_i32(a->rs1);
-    TCGv_i32 rs2_id = tcg_const_i32(a->rs2);
-    TCGv_i32 rd_id = tcg_const_i32(a->rd);
-    TCGv_i32 reg_type = tcg_const_i32(LOG_REG_TYPE_GPR);
-    
-    gen_helper_qemu_log_reg_src(cpu_env, rs1_id, reg_type);
-    gen_helper_qemu_log_reg_src(cpu_env, rs2_id, reg_type);
-    gen_helper_qemu_log_reg_dst(cpu_env, rd_id, reg_type);
-    
-    tcg_temp_free_i32(rs1_id);
-    tcg_temp_free_i32(rs2_id);
-    tcg_temp_free_i32(rd_id);
-    tcg_temp_free_i32(reg_type);
-    
+
+    if (qemu_ctx_logging_full(ctx)) {
+        TCGv_i32 rs1_id = tcg_const_i32(a->rs1);
+        TCGv_i32 rs2_id = tcg_const_i32(a->rs2);
+        TCGv_i32 rd_id = tcg_const_i32(a->rd);
+        TCGv_i32 reg_type = tcg_const_i32(LOG_REG_TYPE_GPR);
+
+        gen_helper_qemu_log_reg_src(cpu_env, rs1_id, reg_type);
+        gen_helper_qemu_log_reg_src(cpu_env, rs2_id, reg_type);
+        gen_helper_qemu_log_reg_dst(cpu_env, rd_id, reg_type);
+
+        tcg_temp_free_i32(rs1_id);
+        tcg_temp_free_i32(rs2_id);
+        tcg_temp_free_i32(rd_id);
+        tcg_temp_free_i32(reg_type);
+    }
+
     return gen_arith(ctx, a, &gen_mulw);
 }
 
 static bool trans_divw(DisasContext *ctx, arg_divw *a)
 {
     REQUIRE_EXT(ctx, RVM);
-    
-    TCGv_i32 rs1_id = tcg_const_i32(a->rs1);
-    TCGv_i32 rs2_id = tcg_const_i32(a->rs2);
-    TCGv_i32 rd_id = tcg_const_i32(a->rd);
-    TCGv_i32 reg_type = tcg_const_i32(LOG_REG_TYPE_GPR);
-    
-    gen_helper_qemu_log_reg_src(cpu_env, rs1_id, reg_type);
-    gen_helper_qemu_log_reg_src(cpu_env, rs2_id, reg_type);
-    gen_helper_qemu_log_reg_dst(cpu_env, rd_id, reg_type);
-    
-    tcg_temp_free_i32(rs1_id);
-    tcg_temp_free_i32(rs2_id);
-    tcg_temp_free_i32(rd_id);
-    tcg_temp_free_i32(reg_type);
-    
+
+    if (qemu_ctx_logging_full(ctx)) {
+        TCGv_i32 rs1_id = tcg_const_i32(a->rs1);
+        TCGv_i32 rs2_id = tcg_const_i32(a->rs2);
+        TCGv_i32 rd_id = tcg_const_i32(a->rd);
+        TCGv_i32 reg_type = tcg_const_i32(LOG_REG_TYPE_GPR);
+
+        gen_helper_qemu_log_reg_src(cpu_env, rs1_id, reg_type);
+        gen_helper_qemu_log_reg_src(cpu_env, rs2_id, reg_type);
+        gen_helper_qemu_log_reg_dst(cpu_env, rd_id, reg_type);
+
+        tcg_temp_free_i32(rs1_id);
+        tcg_temp_free_i32(rs2_id);
+        tcg_temp_free_i32(rd_id);
+        tcg_temp_free_i32(reg_type);
+    }
+
     return gen_arith_div_w(ctx, a, &gen_div);
 }
 
 static bool trans_divuw(DisasContext *ctx, arg_divuw *a)
 {
     REQUIRE_EXT(ctx, RVM);
-    
-    TCGv_i32 rs1_id = tcg_const_i32(a->rs1);
-    TCGv_i32 rs2_id = tcg_const_i32(a->rs2);
-    TCGv_i32 rd_id = tcg_const_i32(a->rd);
-    TCGv_i32 reg_type = tcg_const_i32(LOG_REG_TYPE_GPR);
-    
-    gen_helper_qemu_log_reg_src(cpu_env, rs1_id, reg_type);
-    gen_helper_qemu_log_reg_src(cpu_env, rs2_id, reg_type);
-    gen_helper_qemu_log_reg_dst(cpu_env, rd_id, reg_type);
-    
-    tcg_temp_free_i32(rs1_id);
-    tcg_temp_free_i32(rs2_id);
-    tcg_temp_free_i32(rd_id);
-    tcg_temp_free_i32(reg_type);
-    
+
+    if (qemu_ctx_logging_full(ctx)) {
+        TCGv_i32 rs1_id = tcg_const_i32(a->rs1);
+        TCGv_i32 rs2_id = tcg_const_i32(a->rs2);
+        TCGv_i32 rd_id = tcg_const_i32(a->rd);
+        TCGv_i32 reg_type = tcg_const_i32(LOG_REG_TYPE_GPR);
+
+        gen_helper_qemu_log_reg_src(cpu_env, rs1_id, reg_type);
+        gen_helper_qemu_log_reg_src(cpu_env, rs2_id, reg_type);
+        gen_helper_qemu_log_reg_dst(cpu_env, rd_id, reg_type);
+
+        tcg_temp_free_i32(rs1_id);
+        tcg_temp_free_i32(rs2_id);
+        tcg_temp_free_i32(rd_id);
+        tcg_temp_free_i32(reg_type);
+    }
+
     return gen_arith_div_uw(ctx, a, &gen_divu);
 }
 
 static bool trans_remw(DisasContext *ctx, arg_remw *a)
 {
     REQUIRE_EXT(ctx, RVM);
-    
-    TCGv_i32 rs1_id = tcg_const_i32(a->rs1);
-    TCGv_i32 rs2_id = tcg_const_i32(a->rs2);
-    TCGv_i32 rd_id = tcg_const_i32(a->rd);
-    TCGv_i32 reg_type = tcg_const_i32(LOG_REG_TYPE_GPR);
-    
-    gen_helper_qemu_log_reg_src(cpu_env, rs1_id, reg_type);
-    gen_helper_qemu_log_reg_src(cpu_env, rs2_id, reg_type);
-    gen_helper_qemu_log_reg_dst(cpu_env, rd_id, reg_type);
-    
-    tcg_temp_free_i32(rs1_id);
-    tcg_temp_free_i32(rs2_id);
-    tcg_temp_free_i32(rd_id);
-    tcg_temp_free_i32(reg_type);
-    
+
+    if (qemu_ctx_logging_full(ctx)) {
+        TCGv_i32 rs1_id = tcg_const_i32(a->rs1);
+        TCGv_i32 rs2_id = tcg_const_i32(a->rs2);
+        TCGv_i32 rd_id = tcg_const_i32(a->rd);
+        TCGv_i32 reg_type = tcg_const_i32(LOG_REG_TYPE_GPR);
+
+        gen_helper_qemu_log_reg_src(cpu_env, rs1_id, reg_type);
+        gen_helper_qemu_log_reg_src(cpu_env, rs2_id, reg_type);
+        gen_helper_qemu_log_reg_dst(cpu_env, rd_id, reg_type);
+
+        tcg_temp_free_i32(rs1_id);
+        tcg_temp_free_i32(rs2_id);
+        tcg_temp_free_i32(rd_id);
+        tcg_temp_free_i32(reg_type);
+    }
+
     return gen_arith_div_w(ctx, a, &gen_rem);
 }
 
 static bool trans_remuw(DisasContext *ctx, arg_remuw *a)
 {
     REQUIRE_EXT(ctx, RVM);
-    
-    TCGv_i32 rs1_id = tcg_const_i32(a->rs1);
-    TCGv_i32 rs2_id = tcg_const_i32(a->rs2);
-    TCGv_i32 rd_id = tcg_const_i32(a->rd);
-    TCGv_i32 reg_type = tcg_const_i32(LOG_REG_TYPE_GPR);
-    
-    gen_helper_qemu_log_reg_src(cpu_env, rs1_id, reg_type);
-    gen_helper_qemu_log_reg_src(cpu_env, rs2_id, reg_type);
-    gen_helper_qemu_log_reg_dst(cpu_env, rd_id, reg_type);
-    
-    tcg_temp_free_i32(rs1_id);
-    tcg_temp_free_i32(rs2_id);
-    tcg_temp_free_i32(rd_id);
-    tcg_temp_free_i32(reg_type);
-    
+
+    if (qemu_ctx_logging_full(ctx)) {
+        TCGv_i32 rs1_id = tcg_const_i32(a->rs1);
+        TCGv_i32 rs2_id = tcg_const_i32(a->rs2);
+        TCGv_i32 rd_id = tcg_const_i32(a->rd);
+        TCGv_i32 reg_type = tcg_const_i32(LOG_REG_TYPE_GPR);
+
+        gen_helper_qemu_log_reg_src(cpu_env, rs1_id, reg_type);
+        gen_helper_qemu_log_reg_src(cpu_env, rs2_id, reg_type);
+        gen_helper_qemu_log_reg_dst(cpu_env, rd_id, reg_type);
+
+        tcg_temp_free_i32(rs1_id);
+        tcg_temp_free_i32(rs2_id);
+        tcg_temp_free_i32(rd_id);
+        tcg_temp_free_i32(reg_type);
+    }
+
     return gen_arith_div_uw(ctx, a, &gen_remu);
 }
 #endif

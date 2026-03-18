@@ -47,6 +47,9 @@
 /* DEBUG defines, enable DEBUG_TLB_LOG to log to the CPU_LOG_MMU target */
 /* #define DEBUG_TLB */
 /* #define DEBUG_TLB_LOG */
+#ifdef CONFIG_TCG_LOG_INSTR
+extern bool log_instr_suppress_mem;
+#endif
 
 #ifdef DEBUG_TLB
 # define DEBUG_TLB_GATE 1
@@ -2224,8 +2227,11 @@ tcg_target_ulong helper_be_ldsl_mmu(CPUArchState *env, target_ulong addr,
 /*
  * Log a target memory load via cpu_ldst.
  */
-#define log_instr_load_int(env, addr, value, op)        \
-    helper_qemu_log_instr_load64(env, addr, value, op)
+#define log_instr_load_int(env, addr, value, op)            \
+    do {                                                     \
+        if (likely(!log_instr_suppress_mem))                  \
+            helper_qemu_log_instr_load64(env, addr, value, op); \
+    } while (0)
 #else
 #define log_instr_load_int(env, addr, val, op) ((void)0)
 #endif
@@ -2721,8 +2727,11 @@ void helper_be_stq_mmu(CPUArchState *env, target_ulong addr, uint64_t val,
 /*
  * Log a target memory store via cpu_ldst.
  */
-#define log_instr_store_int(env, addr, value, op)       \
-    helper_qemu_log_instr_store64(env, addr, value, op)
+#define log_instr_store_int(env, addr, value, op)           \
+    do {                                                     \
+        if (likely(!log_instr_suppress_mem))                  \
+            helper_qemu_log_instr_store64(env, addr, value, op); \
+    } while (0)
 #else
 #define log_instr_store_int(env, addr, val, op) ((void)0)
 #endif

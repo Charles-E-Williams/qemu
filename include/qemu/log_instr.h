@@ -147,7 +147,7 @@ typedef enum {
 
 typedef struct {
     uint8_t     reg_id;    // Register index (0-31)
-    LogRegType  type;       // Our new type
+    LogRegType  type;     
 } qemu_log_reg_info;
 
 
@@ -175,6 +175,11 @@ static struct {
     bool     file_open;
 } sp_state = { .current_idx = -1 };
 
+typedef enum {
+    LOG_MODE_ALL,
+    LOG_MODE_MEM,
+    LOG_MODE_COUNT,
+} log_instr_mode_t;
 
 typedef struct {
     bool should_trace;

@@ -249,7 +249,7 @@ void HELPER(amoswap_cap)(CPUArchState *env, uint32_t dest_reg,
 
 
 #if defined(CONFIG_TCG_LOG_INSTR)
-    if (qemu_log_instr_enabled(env)) {
+    if (qemu_log_instr_enabled(env) && !log_instr_fast_forward) {
         qemu_log_instr_mem_auth_cap(env, cbp, addr_reg);
     }
 #endif
@@ -307,7 +307,7 @@ static void lr_c_impl(CPUArchState *env, uint32_t dest_reg, uint32_t auth_reg,
     const cap_register_t *cbp = get_load_store_base_cap(env, auth_reg);
     
 #if defined(CONFIG_TCG_LOG_INSTR)
-    if (qemu_log_instr_enabled(env)) {
+    if (qemu_log_instr_enabled(env) && !log_instr_fast_forward) {
         qemu_log_instr_mem_auth_cap(env, cbp, auth_reg);
     }
 #endif
