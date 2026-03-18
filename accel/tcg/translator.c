@@ -47,6 +47,8 @@ void translator_loop(const TranslatorOps *ops, DisasContextBase *db,
      * log level changes.
      */
     const bool log_instr_enabled = qemu_log_instr_enabled(cpu->env_ptr);
+    extern GArray *simpoints;
+    extern GArray *simpoint_pcs;
 #endif
 
     /* Initialize DisasContext */
@@ -77,6 +79,7 @@ void translator_loop(const TranslatorOps *ops, DisasContextBase *db,
      * log level changes.
      */
     db->log_instr_enabled = log_instr_enabled;
+    target_ulong tick_pc = db->pc_first;
 #endif /* CONFIG_TCG_LOG_INSTR */
 
     /* Reset the temp count so that we can identify leaks */
@@ -120,6 +123,7 @@ void translator_loop(const TranslatorOps *ops, DisasContextBase *db,
         if (_pc_is_current && db->num_insns > 1) {
             tcg_gen_movi_tl(_pc_is_current, 0);
         }
+        target_ulong tick_pc = db->pc_next;
 #endif
         ops->insn_start(db, cpu);
         tcg_debug_assert(db->is_jmp == DISAS_NEXT);  /* no early exit */
@@ -185,6 +189,12 @@ void translator_loop(const TranslatorOps *ops, DisasContextBase *db,
         }
 
 #ifdef CONFIG_TCG_LOG_INSTR
+        /* SimPoint tick — always emitted, not gated on logging */
+        if (simpoints || simpoint_pcs) {
+            TCGv pc_arg = tcg_const_tl(tick_pc);
+            gen_helper_simpoint_tick(cpu_env, pc_arg);
+            tcg_temp_free(pc_arg);
+        }
         /* Commit this instruction */
         if (unlikely(log_instr_enabled)) {
             /*
@@ -198,6 +208,11 @@ void translator_loop(const TranslatorOps *ops, DisasContextBase *db,
     }
 
 #ifdef CONFIG_TCG_LOG_INSTR
+    if (simpoints || simpoint_pcs) {
+        TCGv pc_arg = tcg_const_tl(tick_pc);  /* resolved at runtime */
+        gen_helper_simpoint_tick(cpu_env, pc_arg);
+        tcg_temp_free(pc_arg);
+    }
     /*
      * Flush buffers for last instruction. Committing itself is done in the
      * next TB in order to capture results of exception handling.

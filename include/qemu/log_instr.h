@@ -173,6 +173,7 @@ static struct {
     bool     stop;
     bool     started;
     bool     file_open;
+    bool     qtrace_started; 
 } sp_state = { .current_idx = -1 };
 
 

@@ -466,6 +466,16 @@ static void *cheri_tag_invalidate_one(CPUArchState *env, target_ulong vaddr,
     }
 
     tagblock_clear_tag_tagmem(tagmem, tag_offset);
+#if defined(CONFIG_TCG_LOG_INSTR)
+    {
+        extern bool cap_store_tracking_active;
+        extern GHashTable *cap_store_tracker;
+        if (cap_store_tracking_active && cap_store_tracker) {
+            target_ulong aligned = vaddr & ~((target_ulong)15);
+            g_hash_table_remove(cap_store_tracker, GSIZE_TO_POINTER(aligned));
+        }
+    }
+#endif
     return host_addr;
 }
 

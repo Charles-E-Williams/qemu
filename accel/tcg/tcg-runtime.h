@@ -377,6 +377,10 @@ DEF_HELPER_FLAGS_3(qemu_log_instr_branch, TCG_CALL_NO_WG, void, env, i32, i32)
 DEF_HELPER_FLAGS_3(qemu_log_reg_src, TCG_CALL_NO_WG, void, env, i32, i32)
 DEF_HELPER_FLAGS_3(qemu_log_reg_dst, TCG_CALL_NO_WG, void, env, i32, i32)
 
+// charles: new tcg helper to (hopefully) turn tracing off between simpoints
+DEF_HELPER_FLAGS_2(simpoint_tick, TCG_CALL_NO_WG, void, env, tl)
+
+
 #ifdef TARGET_CHERI
 DEF_HELPER_FLAGS_3(qemu_log_instr_cap, TCG_CALL_NO_WG, void, env, cptr, cptr)
 #endif

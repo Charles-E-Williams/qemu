@@ -328,6 +328,11 @@ void qemu_log_instr_evt(CPUArchState *env, uint16_t fn, target_ulong arg0,
                         target_ulong arg1, target_ulong arg2,
                         target_ulong arg3);
 
+#ifdef TARGET_CHERI
+void simpoint_track_cap_store_raw(CPUArchState *env, target_ulong addr,
+                                  target_ulong pesbt_for_mem, target_ulong cursor,
+                                  bool tag);
+#endif
 /*
  * Log extra information as a string. Some logging formats may
  * ignore this.

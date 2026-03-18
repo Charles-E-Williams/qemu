@@ -1619,6 +1619,17 @@ void store_cap_to_memory_mmu_index(CPUArchState *env, uint32_t cs,
         qemu_log_instr_st_cap(env, vaddr, &stored_cap);
     }
 #endif
+
+#if defined(CONFIG_TCG_LOG_INSTR) && defined(TARGET_CHERI)
+    /* Track capability stores for SimPoint preambles — independent of logging.
+     * This runs even when logging TBs are not compiled in. */
+    {
+        extern bool cap_store_tracking_active;
+        if (cap_store_tracking_active) {
+            simpoint_track_cap_store_raw(env, vaddr, pesbt_for_mem, cursor, tag);
+        }
+    }
+#endif
 }
 
 void store_cap_to_memory(CPUArchState *env, uint32_t cs, target_ulong vaddr,

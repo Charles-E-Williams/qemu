@@ -96,14 +96,21 @@
  * -dfilter ranges in common logging implementation.
  */
 extern GArray *debug_regions;
+
 extern GArray *simpoints;
 extern GArray *adjusted_simpoints;
 extern GArray *warmup_duration;
+
 extern GArray *simpoint_pcs;       
+
 extern uint64_t INTERVAL_SIZE;
 extern uint64_t WARMUP_INTERVAL;
 extern uint64_t START_PC; 
+
 static GHashTable *pc_exec_count_map = NULL;
+
+/* Global flag: track cap stores outside of logging infrastructure */
+bool cap_store_tracking_active = false;
 
 /*
  * Instruction log info associated with each committed log entry.
@@ -325,7 +332,7 @@ typedef struct {
  
     /* What's present */
     uint8_t  cap_op;
-} champsim_cheri_trace_entry_t;
+} champsim_cheri_trace_entry_t; 
 
 
 /* Version 3 Cheri Stream Trace header info */
@@ -985,7 +992,7 @@ static void emit_champsim_cheri_stop(CPUArchState *env, target_ulong pc)
 
 #ifdef TARGET_CHERI
 
-static GHashTable *cap_store_tracker = NULL;
+GHashTable *cap_store_tracker = NULL;
 static const guint CAP_STORE_FLUSH_THRESHOLD = 500000;
 
 static int preopen_simpoint_idx = -1;
@@ -1119,6 +1126,54 @@ static void preopen_trace_for_cap_stores(int idx)
     qemu_set_log_filename(filename, &error_fatal);
     sp_state.file_open = true;
     preopen_simpoint_idx = idx;
+}
+
+
+/*
+ * Lightweight cap store tracker for pre-simpoint phases.
+ * Called directly from store_cap_to_memory, independent of logging framework.
+ * Only tracks address + cap metadata — no register dependencies needed.
+ */
+void simpoint_track_cap_store_raw(CPUArchState *env, target_ulong addr,
+                                  target_ulong pesbt_for_mem, target_ulong cursor,
+                                  bool tag)
+{
+    /* Only track during non-tracing phases (between simpoints) */
+    if (sp_state.tracing || sp_state.stop)
+        return;
+
+    init_cap_store_tracker();
+
+    if (tag) {
+        /* Tagged cap store — track it */
+        target_ulong pesbt = pesbt_for_mem ^ CAP_NULL_XOR_MASK;
+        cap_register_t cr;
+        CAP_cc(decompress_raw)(pesbt, cursor, true, &cr);
+
+        cap_store_entry_t *entry = g_new(cap_store_entry_t, 1);
+        entry->addr = addr;
+
+        /* Build a minimal trace — only fields ChampSim consumer uses */
+        memset(&entry->trace, 0, sizeof(entry->trace));
+        entry->trace.destination_memory[0] = addr;
+        entry->trace.cap_tag    = cr.cr_tag;
+        entry->trace.cap_base   = cap_get_base(&cr);
+        entry->trace.cap_length = cap_get_length_sat(&cr);
+        entry->trace.cap_offset = cap_get_offset(&cr);
+        entry->trace.cap_perms  = cap_get_perms(&cr);
+        entry->trace.cap_op     = CAP_OP_PRESIMPOINT;
+
+        g_hash_table_replace(cap_store_tracker,
+                            GSIZE_TO_POINTER(addr), entry);
+    } else {
+        /* Untagged cap-width store — invalidate */
+        g_hash_table_remove(cap_store_tracker, GSIZE_TO_POINTER(addr));
+    }
+
+    /* Periodic flush to avoid memory exhaustion */
+    if (g_hash_table_size(cap_store_tracker) >= CAP_STORE_FLUSH_THRESHOLD) {
+        flush_cap_store_tracker(env);
+    }
 }
 #endif
 
@@ -1615,20 +1670,20 @@ static void do_instr_commit(CPUArchState *env)
         }
     }
 
-    /* SimPoint dispatch */
-    bool should_emit = true;
-
-    if (simpoint_pcs) {
-        should_emit = handle_pc_simpoints(env, cpulog, iinfo);
-    } else if (simpoints) {
-        should_emit = handle_interval_simpoints(env, iinfo);
-    }
-
-    if (!should_emit)
+    /* If simpoints are active and we're not in a tracing window, skip emit.
+     * (The tick handles boundary logic — this is just a safety check.) */
+    if ((simpoints || simpoint_pcs) && !sp_state.tracing)
         return;
 
-    if ((simpoint_pcs || simpoints) && !sp_state.file_open)
+    if ((simpoints || simpoint_pcs) && !sp_state.file_open)
         return;
+
+    /* Cap store tracking during active tracing is still needed for
+     * the *next* simpoint's preamble */
+#ifdef TARGET_CHERI
+    if (trace_format == &trace_formats[4] && sp_state.tracing)
+        track_cap_store(env, iinfo, /*allow_flush=*/false);
+#endif
 
     emit_with_dfilter(env, iinfo);
 }
@@ -1834,13 +1889,24 @@ void qemu_log_instr_init(CPUState *cpu)
             trace_format->emit_header(cpu->env_ptr);
     }
 
-    /* If we are starting with instruction logging enabled, switch it on now */
-    if (qemu_loglevel_mask(CPU_LOG_INSTR_U))
-        do_cpu_loglevel_switch(
-            cpu, RUN_ON_CPU_HOST_INT(QEMU_LOG_INSTR_LOGLEVEL_USER));
-    else if (qemu_loglevel_mask(CPU_LOG_INSTR))
-        do_cpu_loglevel_switch(cpu,
-            RUN_ON_CPU_HOST_INT(QEMU_LOG_INSTR_LOGLEVEL_ALL));
+    /*
+     * If simpoints are configured, do NOT enable logging at boot.
+     * The simpoint tick will manage loglevel_active dynamically after
+     * qtrace activates. This ensures boot compiles TBs without logging
+     * helpers (tick-only), giving near-native boot speed.
+     */
+    if (simpoints || simpoint_pcs) {
+        cpulog->loglevel = QEMU_LOG_INSTR_LOGLEVEL_NONE;
+        cpulog->loglevel_active = false;
+        /* CPU_LOG_INSTR stays set globally for trace format selection */
+    } else {
+        if (qemu_loglevel_mask(CPU_LOG_INSTR_U))
+            do_cpu_loglevel_switch(
+                cpu, RUN_ON_CPU_HOST_INT(QEMU_LOG_INSTR_LOGLEVEL_USER));
+        else if (qemu_loglevel_mask(CPU_LOG_INSTR))
+            do_cpu_loglevel_switch(cpu,
+                RUN_ON_CPU_HOST_INT(QEMU_LOG_INSTR_LOGLEVEL_ALL));
+    }
 }
 
 static void
@@ -1997,6 +2063,136 @@ void helper_qemu_log_reg_dst(CPUArchState *env, uint32_t reg_id, uint32_t reg_ty
         }
     }
 }
+
+/* Instead of calling do_cpu_loglevel_switch, inline the state change: */
+static void simpoint_enable_logging(CPUArchState *env)
+{
+    cpu_log_instr_state_t *cpulog = get_cpu_log_state(env);
+    global_loglevel_enable();
+    cpulog->loglevel = QEMU_LOG_INSTR_LOGLEVEL_USER;
+    cpulog->loglevel_active = cpu_in_user_mode(env);
+    cpulog->starting = true;
+    tb_flush(env_cpu(env));
+}
+
+static void simpoint_disable_logging(CPUArchState *env)
+{
+    cpu_log_instr_state_t *cpulog = get_cpu_log_state(env);
+    cpu_log_instr_info_t *iinfo = get_cpu_log_instr_info(env);
+
+    /* Emit final commit + stop event if needed */
+    if (cpulog->loglevel_active) {
+        if (!cpulog->starting) {
+            do_instr_commit(env);
+            emit_stop_event(env, cpu_get_recent_pc(env));
+            iinfo = get_cpu_log_instr_info(env);
+            reset_log_buffer(cpulog, iinfo);
+        } else {
+            reset_log_buffer(cpulog, iinfo);
+        }
+    }
+
+    cpulog->loglevel = QEMU_LOG_INSTR_LOGLEVEL_NONE;
+    cpulog->loglevel_active = false;
+    tb_flush(env_cpu(env));
+}
+
+void helper_simpoint_tick(CPUArchState *env, target_ulong pc)
+{
+    /* Fast exits — these are the common case during boot */
+    if (sp_state.stop)
+        return;
+
+    if (!sp_state.qtrace_started)
+        return;
+
+    /* Only count user-mode instructions (matches qtrace -u) */
+    if (!cpu_in_user_mode(env))
+        return;
+
+    /* START_PC gate — wait for program entry point if configured */
+    if (START_PC != 0 && !sp_state.started) {
+        target_ulong check_pc = (pc != 0) ? pc : cpu_get_recent_pc(env);
+        if (check_pc == START_PC) {
+            sp_state.started = true;
+            fprintf(stderr, "SimPoint tick: started at PC 0x%lx\n",
+                    (unsigned long)START_PC);
+        } else {
+            return;
+        }
+    }
+
+#ifdef TARGET_CHERI
+    /* One-time init: pre-open first trace file for cap store accumulation */
+    static bool cap_tracking_initialized = false;
+    if (!cap_tracking_initialized) {
+        if (trace_format == &trace_formats[4]) {
+            cap_store_tracking_active = true;
+            preopen_trace_for_cap_stores(0);
+        }
+        cap_tracking_initialized = true;
+    }
+#endif
+
+    uint64_t n = sp_state.instr_count++;
+
+    if (!simpoints)
+        return;  /* PC-based simpoints handled elsewhere */
+
+    interval_match_t m = find_active_interval(n);
+
+    if (m.should_trace && !sp_state.tracing) {
+        /* ── ENTERING a simpoint window ── */
+#ifdef TARGET_CHERI
+        if (trace_format == &trace_formats[4])
+            flush_cap_store_tracker(env);
+#endif
+        simpoint_open_trace(env, m.idx, m.is_warmup);
+        sp_state.tracing     = true;
+        sp_state.in_warmup   = m.is_warmup;
+        sp_state.current_idx = m.idx;
+
+        /* Enable full logging, recompile TBs with logging helpers */
+        cpu_log_instr_state_t *cpulog = get_cpu_log_state(env);
+        cpulog->loglevel_active = true;
+        cpulog->starting = true;
+        tb_flush(env_cpu(env));
+
+    } else if (m.should_trace && sp_state.tracing) {
+        /* Still inside a window — handle index/warmup transitions */
+        if (m.idx != sp_state.current_idx) {
+            fprintf(stderr, "Switching from simpoint %d to %d (warmup: %s)\n",
+                    sp_state.current_idx, m.idx,
+                    m.is_warmup ? "yes" : "no");
+            simpoint_open_trace(env, m.idx, m.is_warmup);
+            sp_state.current_idx = m.idx;
+            sp_state.in_warmup   = m.is_warmup;
+        } else if (sp_state.in_warmup && !m.is_warmup) {
+            fprintf(stderr, "Ending warmup for simpoint %d\n",
+                    sp_state.current_idx);
+            sp_state.in_warmup = false;
+        }
+
+    } else if (!m.should_trace && sp_state.tracing) {
+        /* ── EXITING a simpoint window ── */
+        simpoint_end(env, simpoints->len - 1);
+
+        /* Disable full logging, recompile TBs without logging helpers */
+        cpu_log_instr_state_t *cpulog = get_cpu_log_state(env);
+        cpulog->loglevel_active = false;
+        tb_flush(env_cpu(env));
+    }
+
+    /* Early stop check */
+    if (!sp_state.tracing && !sp_state.stop) {
+        uint64_t last_end = g_array_index(simpoints, uint64_t,
+                                          simpoints->len - 1)
+                          + INTERVAL_SIZE;
+        if (n > last_end)
+            sp_state.stop = true;
+    }
+}
+
 
 #ifdef TARGET_CHERI
 void qemu_log_instr_cap(CPUArchState *env, const char *reg_name,
@@ -2618,17 +2814,41 @@ void helper_qemu_log_instr_user_start(CPUArchState *env, target_ulong pc)
     log_assert(cpulog != NULL && "Invalid log state");
     global_loglevel_enable();
 
-    /* If we are already in the correct mode, bail */
-    if (cpulog->loglevel == QEMU_LOG_INSTR_LOGLEVEL_USER)
+    if (simpoints || simpoint_pcs) {
+        /*
+         * SimPoint mode: don't enable full logging yet.
+         * Set loglevel so the tick knows the tracing mode (USER),
+         * but keep loglevel_active=false so TBs stay lightweight.
+         * The tick will toggle loglevel_active at simpoint boundaries.
+         */
+        cpulog->loglevel = QEMU_LOG_INSTR_LOGLEVEL_USER;
+        cpulog->loglevel_active = false;
+        sp_state.qtrace_started = true;
+        fprintf(stderr, "SimPoint mode: qtrace activated, tick manages logging\n");
         return;
+    }
 
+    /* Non-simpoint mode: original behavior */
+    if (cpulog->loglevel == QEMU_LOG_INSTR_LOGLEVEL_USER &&
+        cpulog->loglevel_active)
+        return;
     cpu_loglevel_switch(env, QEMU_LOG_INSTR_LOGLEVEL_USER);
 }
 
 /* Stop logging on the current CPU */
 void helper_qemu_log_instr_stop(CPUArchState *env, target_ulong pc)
 {
-
+    if (simpoints || simpoint_pcs) {
+        sp_state.qtrace_started = false;
+        sp_state.stop = true;
+        cpu_log_instr_state_t *cpulog = get_cpu_log_state(env);
+        if (cpulog->loglevel_active) {
+            cpulog->loglevel_active = false;
+            tb_flush(env_cpu(env));
+        }
+        cpulog->loglevel = QEMU_LOG_INSTR_LOGLEVEL_NONE;
+        return;
+    }
     cpu_loglevel_switch(env, QEMU_LOG_INSTR_LOGLEVEL_NONE);
 }
 
