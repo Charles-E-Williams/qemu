@@ -283,6 +283,13 @@ typedef struct {
   uint64_t source_memory[NUM_INSTR_SOURCES];           // input memory
 } champsim_trace_entry_t;
 
+
+#define CAP_OP_NONE         0x00
+#define CAP_OP_AUTH         0x01
+#define CAP_OP_TRANSFERRED  0x02
+#define CAP_OP_BOTH         (CAP_OP_AUTH | CAP_OP_TRANSFERRED)
+#define CAP_OP_PRESIMPOINT  0x04
+
 typedef struct {
 #define REG_STACK_POINTER 6
 #define REG_FLAGS  25
@@ -291,22 +298,33 @@ typedef struct {
 #define NUM_INSTR_DESTINATIONS 2
 #define NUM_INSTR_SOURCES 4
     // instruction pointer or PC (Program Counter)
-  uint64_t ip;
+    uint64_t ip;
 
-  // branch info
-  uint8_t is_branch;
-  uint8_t branch_taken;
+    // branch info
+    uint8_t is_branch;
+    uint8_t branch_taken;
 
-  uint8_t destination_registers[NUM_INSTR_DESTINATIONS]; // output registers
-  uint8_t source_registers[NUM_INSTR_SOURCES];           // input registers
+    uint8_t destination_registers[NUM_INSTR_DESTINATIONS]; // output registers
+    uint8_t source_registers[NUM_INSTR_SOURCES];           // input registers
 
-  uint64_t destination_memory[NUM_INSTR_DESTINATIONS]; // output memory
-  uint64_t source_memory[NUM_INSTR_SOURCES];           // input memory
+    uint64_t destination_memory[NUM_INSTR_DESTINATIONS]; // output memory
+    uint64_t source_memory[NUM_INSTR_SOURCES];           // input memory
 
-  uint64_t base, length,offset;
-  uint32_t permissions;
-  uint8_t tag;
-  uint8_t cap_op;
+    uint64_t auth_base;
+    uint64_t auth_length;
+    uint64_t auth_offset;
+    uint32_t auth_perms;
+    uint8_t  auth_tag;
+ 
+    /* Transferred capability (cap load/store value) */
+    uint64_t cap_base;
+    uint64_t cap_length;
+    uint64_t cap_offset;
+    uint32_t cap_perms;
+    uint8_t  cap_tag;
+ 
+    /* What's present */
+    uint8_t  cap_op;
 } champsim_cheri_trace_entry_t;
 
 
@@ -834,50 +852,41 @@ static void emit_champsim_cheri_entry(CPUArchState *env, cpu_log_instr_info_t *i
     trace.ip = iinfo->pc;
     trace.is_branch = iinfo->is_branch;
     trace.branch_taken = iinfo->branch_taken;
-    trace.cap_op = 0;
-    
+    trace.cap_op = CAP_OP_NONE;
+
 #ifdef TARGET_CHERI
-    cap_register_t* cr = NULL;
-    // check memory operations for capability loads/stores 
-    if (iinfo->mem->len > 0) {
-        for (int i = 0; i < iinfo->mem->len; i++) {
-            log_meminfo_t *minfo = &g_array_index(iinfo->mem, log_meminfo_t, i);
-            if (meminfo_is_cap(minfo)) {
-                cr = &minfo->cap;
-                trace.cap_op = 2;
-                break;
-            }
-        }
-    }
-    // Check register operations for capability manipulation
-    if (cr == NULL && iinfo->regs->len > 0) {
-        for (int i = 0; i < iinfo->regs->len; i++) {
-            log_reginfo_t *rinfo = &g_array_index(iinfo->regs, log_reginfo_t, i);
-            if (reginfo_is_cap(rinfo) && reginfo_has_cap(rinfo)) {
-                cr = &rinfo->cap;
-                trace.cap_op = 3;
-                break;
-            }
-        }
-    }
-    if (cr != NULL) {
-        trace.tag = cr->cr_tag;
-        trace.base = cap_get_base(cr);
-        trace.length = cap_get_length_sat(cr);
-        trace.offset = cap_get_offset(cr);
-        trace.permissions = cap_get_perms(cr);
-    } else if (iinfo->has_auth_cap) {
-        // Regular load/store authorized by a capability (DDC or capmode register)
+    /* Auth cap: set by cap_check_common / ddc_check_bounds */
+    if (iinfo->has_auth_cap) {
         const cap_register_t *ac = &iinfo->auth_cap;
-        trace.tag = ac->cr_tag;
-        trace.base = cap_get_base(ac);
-        trace.offset = cap_get_offset(ac);
-        trace.length = cap_get_length_sat(ac);
-        trace.permissions = cap_get_perms(ac);
-        trace.cap_op = 1;
+        trace.auth_tag    = ac->cr_tag;
+        trace.auth_base   = cap_get_base(ac);
+        trace.auth_length = cap_get_length_sat(ac);
+        trace.auth_offset = cap_get_offset(ac);
+        trace.auth_perms  = cap_get_perms(ac);
+        trace.cap_op     |= CAP_OP_AUTH;
+        // qemu_log("  AUTH_CAP: TAG=%u BASE=%016" PRIx64 " LEN=%016" PRIx64 " OFF=%016" PRIx64 " PERMS=0x%08x\n",
+        // trace.auth_tag, trace.auth_base, trace.auth_length, trace.auth_offset, trace.auth_perms);
+    }
+ 
+    /* Transferred cap: capability value loaded/stored through memory */
+    for (int i = 0; i < iinfo->mem->len; i++) {
+        log_meminfo_t *minfo = &g_array_index(iinfo->mem, log_meminfo_t, i);
+        if (meminfo_is_cap(minfo) && minfo->cap.cr_tag) {
+            cap_register_t *cr = &minfo->cap;
+            trace.cap_tag    = cr->cr_tag;
+            trace.cap_base   = cap_get_base(cr);
+            trace.cap_length = cap_get_length_sat(cr);
+            trace.cap_offset = cap_get_offset(cr);
+            trace.cap_perms  = cap_get_perms(cr);
+            trace.cap_op    |= CAP_OP_TRANSFERRED;
+            // qemu_log("  XFER_CAP: TAG=%u BASE=%016" PRIx64 " LEN=%016" PRIx64 " OFF=%016" PRIx64 " PERMS=0x%08x\n",
+            // trace.cap_tag, trace.cap_base, trace.cap_length, trace.cap_offset, trace.cap_perms);
+            break;
+            
+        }
     }
 #endif
- 
+
     uint32_t source_mem_idx = 0;
     uint32_t dest_mem_idx = 0;
     const uint64_t CACHE_LINE_SIZE = 64;
@@ -885,167 +894,83 @@ static void emit_champsim_cheri_entry(CPUArchState *env, cpu_log_instr_info_t *i
 
     for (int i = 0; i < iinfo->mem->len; i++) {
         log_meminfo_t *minfo = &g_array_index(iinfo->mem, log_meminfo_t, i);
-
         uint64_t address = minfo->addr;
         uint8_t access_size = memop_size(minfo->op);
-
-        //checks if the address spans multiple cache lines
-        uint64_t cacheline_access_ini = address & ~CACHE_LINE_MASK;
-        uint64_t cacheline_access_end = (address + access_size - 1) & ~CACHE_LINE_MASK;
-        bool spans_two_cachelines = (cacheline_access_ini != cacheline_access_end);
+        uint64_t cl_start = address & ~CACHE_LINE_MASK;
+        uint64_t cl_end = (address + access_size - 1) & ~CACHE_LINE_MASK;
+        bool spans = (cl_start != cl_end);
 
         if (minfo->flags & LMI_LD) {
-            if (source_mem_idx < NUM_INSTR_SOURCES) {
-                trace.source_memory[source_mem_idx] = address;
-                source_mem_idx++; 
-            } 
-            if (spans_two_cachelines) {
-                if (source_mem_idx < NUM_INSTR_SOURCES) {
-                    trace.source_memory[source_mem_idx] = cacheline_access_end;
-                    source_mem_idx++;
-                }
-            }
-
+            if (source_mem_idx < NUM_INSTR_SOURCES)
+                trace.source_memory[source_mem_idx++] = address;
+            if (spans && source_mem_idx < NUM_INSTR_SOURCES)
+                trace.source_memory[source_mem_idx++] = cl_end;
         } else if (minfo->flags & LMI_ST) {
-            if (dest_mem_idx < NUM_INSTR_DESTINATIONS) {
-                trace.destination_memory[dest_mem_idx] = address;
-                dest_mem_idx++;
-            }
-            if (spans_two_cachelines) {
-                if (dest_mem_idx < NUM_INSTR_DESTINATIONS) {
-                    trace.destination_memory[dest_mem_idx] = cacheline_access_end;
-                    dest_mem_idx++;
-                }
-            }
+            if (dest_mem_idx < NUM_INSTR_DESTINATIONS)
+                trace.destination_memory[dest_mem_idx++] = address;
+            if (spans && dest_mem_idx < NUM_INSTR_DESTINATIONS)
+                trace.destination_memory[dest_mem_idx++] = cl_end;
         }
     }
 
     if (iinfo->is_branch) {
         switch (iinfo->branch_type) {
-            case BRANCH_DIRECT_JUMP: // writes IP only
+            case BRANCH_DIRECT_JUMP:
                 trace.destination_registers[0] = REG_INSTRUCTION_POINTER;
                 break;
-
-            case BRANCH_INDIRECT: // writes IP and reads other
+            case BRANCH_INDIRECT:
                 trace.destination_registers[0] = REG_INSTRUCTION_POINTER;
                 trace.source_registers[0]      = remap_regid(iinfo->src_regs[0].reg_id, LOG_REG_TYPE_GPR);
                 break;
-
-            case BRANCH_CONDITIONAL: // writes IP, reads IP and reads other
+            case BRANCH_CONDITIONAL:
                 trace.destination_registers[0] = REG_INSTRUCTION_POINTER;
                 trace.source_registers[0]      = REG_INSTRUCTION_POINTER;
                 trace.source_registers[1]      = remap_regid(iinfo->src_regs[0].reg_id, LOG_REG_TYPE_GPR);
                 trace.source_registers[2]      = remap_regid(iinfo->src_regs[1].reg_id, LOG_REG_TYPE_GPR);
                 break;
-
-            case BRANCH_DIRECT_CALL: 
+            case BRANCH_DIRECT_CALL:
                 trace.destination_registers[0] = REG_INSTRUCTION_POINTER;
                 trace.destination_registers[1] = remap_regid(iinfo->dst_regs[0].reg_id, LOG_REG_TYPE_GPR);
                 trace.source_registers[0]      = REG_INSTRUCTION_POINTER;
                 break;
-            
-            case BRANCH_INDIRECT_CALL: 
+            case BRANCH_INDIRECT_CALL:
                 trace.destination_registers[0] = REG_INSTRUCTION_POINTER;
                 trace.destination_registers[1] = remap_regid(iinfo->dst_regs[0].reg_id, LOG_REG_TYPE_GPR);
                 trace.source_registers[0]      = REG_INSTRUCTION_POINTER;
                 trace.source_registers[1]      = remap_regid(iinfo->src_regs[0].reg_id, LOG_REG_TYPE_GPR);
                 break;
-
-            case BRANCH_RETURN: // reads other, writes SP, writes IP, reads SP
+            case BRANCH_RETURN:
                 trace.destination_registers[0] = REG_INSTRUCTION_POINTER;
                 trace.source_registers[0]      = REG_RETURN;
-                trace.source_registers[1]      = REG_INSTRUCTION_POINTER; 
+                trace.source_registers[1]      = REG_INSTRUCTION_POINTER;
                 break;
-
-            case BRANCH_CJAL: 
+            case BRANCH_CJAL:
                 trace.destination_registers[0] = REG_INSTRUCTION_POINTER;
                 trace.destination_registers[1] = remap_regid(iinfo->dst_regs[0].reg_id, LOG_REG_TYPE_CAP);
                 trace.source_registers[0]      = REG_INSTRUCTION_POINTER;
                 break;
-            
-            case BRANCH_CJALR: 
+            case BRANCH_CJALR:
                 trace.destination_registers[0] = REG_INSTRUCTION_POINTER;
                 trace.destination_registers[1] = remap_regid(iinfo->dst_regs[0].reg_id, LOG_REG_TYPE_CAP);
                 trace.source_registers[0]      = REG_INSTRUCTION_POINTER;
                 trace.source_registers[1]      = remap_regid(iinfo->src_regs[0].reg_id, LOG_REG_TYPE_CAP);
                 break;
-            
-            case BRANCH_OTHER:
-            case NOT_BRANCH:
-            default: 
+            default:
                 assert(false && "Error: Unrecognized branch type\n");
         }
+    } else {
+        uint8_t num_src = MIN(iinfo->num_src_regs, NUM_INSTR_SOURCES);
+        for (int i = 0; i < num_src; i++)
+            trace.source_registers[i] = remap_regid(iinfo->src_regs[i].reg_id, iinfo->src_regs[i].type);
 
-        logfile = qemu_log_lock();
-        fwrite(&trace, sizeof(trace), 1, logfile);
-        qemu_log_unlock(logfile);
-        // qemu_log(
-        //     "IP=%016" PRIx64
-        //     " | BR=%u TAKEN=%u\n"
-        //     "  src_regs=[%u,%u,%u,%u]\n"
-        //     "  dst_regs=[%u,%u]\n"
-        //     "  source_memory=[%016" PRIx64 ",%016" PRIx64 ",%016" PRIx64 ",%016" PRIx64 "]\n"
-        //     "  destination_memory=[%016" PRIx64 ",%016" PRIx64 "]\n"
-        //     "  CAP_META: BASE=%016" PRIx64 " LEN=%016" PRIx64 " OFF=%016" PRIx64 "\n"
-        //     "            PERMS=0x%04x TAG=%u IS_CAP=%u\n",
-        //     trace.ip,
-        //     trace.is_branch,
-        //     trace.branch_taken,
-
-        //     trace.source_registers[0], trace.source_registers[1],
-        //     trace.source_registers[2], trace.source_registers[3],
-
-        //     trace.destination_registers[0], trace.destination_registers[1],
-
-        //     trace.source_memory[0], trace.source_memory[1], trace.source_memory[2], trace.source_memory[3],
-        //     trace.destination_memory[0], trace.destination_memory[1],
-
-        //     trace.base, trace.length, trace.offset,
-        //     trace.permissions, trace.tag, trace.cap_op
-        // );
-        // qemu_log("BRANCH TYPE |%d\n", iinfo->branch_type);
-
-        return;
-    }
-
-    uint8_t num_src = MIN(iinfo->num_src_regs, NUM_INSTR_SOURCES);
-    for (int i = 0; i < num_src; i++) {
-        trace.source_registers[i] = remap_regid(iinfo->src_regs[i].reg_id, iinfo->src_regs[i].type);
-    }
-
-    uint8_t num_dst = MIN(iinfo->num_dst_regs, NUM_INSTR_DESTINATIONS);
-    for (int i = 0; i < num_dst; i++) {
-        trace.destination_registers[i] = remap_regid(iinfo->dst_regs[i].reg_id, iinfo->dst_regs[i].type);
+        uint8_t num_dst = MIN(iinfo->num_dst_regs, NUM_INSTR_DESTINATIONS);
+        for (int i = 0; i < num_dst; i++)
+            trace.destination_registers[i] = remap_regid(iinfo->dst_regs[i].reg_id, iinfo->dst_regs[i].type);
     }
 
     logfile = qemu_log_lock();
     fwrite(&trace, sizeof(trace), 1, logfile);
     qemu_log_unlock(logfile);
-
-    // qemu_log(
-    //         "IP=%016" PRIx64
-    //         " | BR=%u TAKEN=%u\n"
-    //         "  src_regs=[%u,%u,%u,%u]\n"
-    //         "  dst_regs=[%u,%u]\n"
-    //         "  source_memory=[%016" PRIx64 ",%016" PRIx64 ",%016" PRIx64 ",%016" PRIx64 "]\n"
-    //         "  destination_memory=[%016" PRIx64 ",%016" PRIx64 "]\n"
-    //         "  CAP_META: BASE=%016" PRIx64 " LEN=%016" PRIx64 " OFF=%016" PRIx64 "\n"
-    //         "            PERMS=0x%04x TAG=%u IS_CAP=%u\n",
-    //         trace.ip,
-    //         trace.is_branch,
-    //         trace.branch_taken,
-
-    //         trace.source_registers[0], trace.source_registers[1],
-    //         trace.source_registers[2], trace.source_registers[3],
-
-    //         trace.destination_registers[0], trace.destination_registers[1],
-
-    //         trace.source_memory[0], trace.source_memory[1], trace.source_memory[2], trace.source_memory[3],
-    //         trace.destination_memory[0], trace.destination_memory[1],
-
-    //         trace.base, trace.length, trace.offset,
-    //         trace.permissions, trace.tag, trace.cap_op
-    // );
 }
 
 static void emit_champsim_cheri_start(CPUArchState *env, target_ulong pc)
@@ -1058,9 +983,144 @@ static void emit_champsim_cheri_stop(CPUArchState *env, target_ulong pc)
     // TODO(am2419) Emit an event for instruction logging stop
 }
 
+#ifdef TARGET_CHERI
 
+static GHashTable *cap_store_tracker = NULL;
+static const guint CAP_STORE_FLUSH_THRESHOLD = 500000;
 
+static int preopen_simpoint_idx = -1;
 
+typedef struct {
+    uint64_t addr;
+    champsim_cheri_trace_entry_t trace;
+} cap_store_entry_t;
+
+static void init_cap_store_tracker(void)
+{
+    if (!cap_store_tracker) {
+        cap_store_tracker = g_hash_table_new_full(
+            g_direct_hash, g_direct_equal, NULL, g_free);
+    }
+}
+
+static champsim_cheri_trace_entry_t
+build_cap_store_trace(cpu_log_instr_info_t *iinfo, log_meminfo_t *minfo)
+{
+    champsim_cheri_trace_entry_t trace = {0};
+
+    trace.ip           = iinfo->pc;
+    trace.is_branch    = iinfo->is_branch;
+    trace.branch_taken = iinfo->branch_taken;
+
+    /* Transferred cap: the capability being stored */
+    cap_register_t *cr  = &minfo->cap;
+    trace.cap_tag       = cr->cr_tag;
+    trace.cap_base      = cap_get_base(cr);
+    trace.cap_length    = cap_get_length_sat(cr);
+    trace.cap_offset    = cap_get_offset(cr);
+    trace.cap_perms     = cap_get_perms(cr);
+
+    trace.cap_op        = CAP_OP_PRESIMPOINT;
+
+    /* Store address */
+    trace.destination_memory[0] = minfo->addr;
+
+    /* Register dependencies */
+    uint8_t num_src = MIN(iinfo->num_src_regs, NUM_INSTR_SOURCES);
+    for (int i = 0; i < num_src; i++)
+        trace.source_registers[i] = remap_regid(
+            iinfo->src_regs[i].reg_id, iinfo->src_regs[i].type);
+
+    uint8_t num_dst = MIN(iinfo->num_dst_regs, NUM_INSTR_DESTINATIONS);
+    for (int i = 0; i < num_dst; i++)
+        trace.destination_registers[i] = remap_regid(
+            iinfo->dst_regs[i].reg_id, iinfo->dst_regs[i].type);
+
+    return trace;
+}
+
+static void flush_cap_store_tracker(CPUArchState *env)
+{
+    if (!cap_store_tracker || g_hash_table_size(cap_store_tracker) == 0)
+        return;
+
+    fprintf(stderr, "Flushing %u tracked capability stores\n",
+            g_hash_table_size(cap_store_tracker));
+
+    FILE *logfile = qemu_log_lock();
+
+    GHashTableIter iter;
+    gpointer key, value;
+    g_hash_table_iter_init(&iter, cap_store_tracker);
+
+    while (g_hash_table_iter_next(&iter, &key, &value)) {
+        cap_store_entry_t *entry = (cap_store_entry_t *)value;
+        fwrite(&entry->trace, sizeof(entry->trace), 1, logfile);
+    }
+
+    qemu_log_unlock(logfile);
+
+    g_hash_table_remove_all(cap_store_tracker);
+}
+
+static void track_cap_store(CPUArchState *env, cpu_log_instr_info_t *iinfo,
+                            bool allow_flush)
+{
+    init_cap_store_tracker();
+
+    for (int i = 0; i < iinfo->mem->len; i++) {
+        log_meminfo_t *minfo = &g_array_index(iinfo->mem, log_meminfo_t, i);
+
+        if ((minfo->flags & LMI_ST) && (minfo->flags & LMI_CAP)) {
+            if (minfo->cap.cr_tag) {
+                /* Valid cap store — track it */
+                cap_store_entry_t *entry = g_new(cap_store_entry_t, 1);
+                entry->addr  = minfo->addr;
+                entry->trace = build_cap_store_trace(iinfo, minfo);
+                g_hash_table_replace(cap_store_tracker,
+                                    GSIZE_TO_POINTER(minfo->addr), entry);
+            } else {
+                /* Untagged cap store — invalidate like a non-cap store */
+                g_hash_table_remove(cap_store_tracker,
+                                    GSIZE_TO_POINTER(minfo->addr));
+            }
+            break;
+        }
+
+        if ((minfo->flags & LMI_ST) && !(minfo->flags & LMI_CAP)) {
+            uint8_t size = memop_size(minfo->op);
+            uint64_t start = minfo->addr & ~((uint64_t)15);
+            uint64_t end = (minfo->addr + size - 1) & ~((uint64_t)15);
+            g_hash_table_remove(cap_store_tracker,
+                                GSIZE_TO_POINTER(start));
+            if (end != start){
+                g_hash_table_remove(cap_store_tracker,
+                                    GSIZE_TO_POINTER(end));
+                }
+
+        }
+    }
+
+    if (allow_flush &&
+        g_hash_table_size(cap_store_tracker) >= CAP_STORE_FLUSH_THRESHOLD) {
+        flush_cap_store_tracker(env);
+    }
+}
+
+static void preopen_trace_for_cap_stores(int idx)
+{
+    char filename[256];
+
+    if (sp_state.file_open)
+        qemu_log_close();
+
+    snprintf(filename, sizeof(filename), "simpoint_%d.trace", idx);
+    fprintf(stderr, "Pre-opening simpoint_%d.trace for cap store accumulation\n", idx);
+    qemu_set_log_filename(filename, &error_fatal);
+    sp_state.file_open = true;
+    preopen_simpoint_idx = idx;
+}
+#endif
 
 
 /* Core instruction logging implementation */
@@ -1105,113 +1165,206 @@ static void reset_log_buffer(cpu_log_instr_state_t *cpulog,
     cpulog->starting = false;
 }
 
-#ifdef TARGET_CHERI
-/* Hash table to track most recent capability store per address */
-static GHashTable *cap_store_tracker = NULL;
+// static void simpoint_open_trace(CPUArchState *env, int idx, bool is_warmup)
+// {
+//     char filename[256];
 
-typedef struct {
-    uint64_t addr;
-    champsim_cheri_trace_entry_t trace;
-} cap_store_entry_t;
+//     if (sp_state.file_open)
+//         qemu_log_close();
 
-static void init_cap_store_tracker(void)
-{
-    if (!cap_store_tracker) {
-        cap_store_tracker = g_hash_table_new_full(
-            g_direct_hash, g_direct_equal, NULL, g_free);
-    }
-}
+//     snprintf(filename, sizeof(filename), "simpoint_%d.trace", idx);
+//     fprintf(stderr, "Starting simpoint %d (warmup: %s), output: %s\n",
+//             idx, is_warmup ? "yes" : "no", filename);
+//     qemu_set_log_filename(filename, &error_fatal);
+//     sp_state.file_open = true;
 
-static champsim_cheri_trace_entry_t
-build_cheri_trace_entry(cpu_log_instr_info_t *iinfo, log_meminfo_t *minfo)
-{
-    champsim_cheri_trace_entry_t trace = {0};
+// }
 
-    trace.ip            = iinfo->pc;
-    trace.is_branch     = iinfo->is_branch;
-    trace.branch_taken  = iinfo->branch_taken;
-    trace.cap_op  = 2;
+// static void simpoint_close_trace(void)
+// {
+//     if (sp_state.file_open) {
+//         qemu_log_close();
+//         sp_state.file_open = false;
+//     }
+// }
 
-    cap_register_t *cr  = &minfo->cap;
-    trace.tag           = cr->cr_tag;
-    trace.base          = cap_get_base(cr);
-    trace.length        = cap_get_length_sat(cr);
-    trace.offset        = cap_get_offset(cr);
-    trace.permissions   = cap_get_perms(cr);
+// static void simpoint_end(int last_idx)
+// {
+//     fprintf(stderr, "Ending simpoint %d\n", sp_state.current_idx);
+//     simpoint_close_trace();
+//     sp_state.tracing    = false;
+//     sp_state.in_warmup  = false;
 
-    trace.destination_memory[0] = minfo->addr;
+//     if (sp_state.current_idx == last_idx)
+//         sp_state.stop = true;
 
-    uint8_t num_src = MIN(iinfo->num_src_regs, NUM_INSTR_SOURCES);
-    for (int i = 0; i < num_src; i++) {
-        trace.source_registers[i] = remap_regid(
-            iinfo->src_regs[i].reg_id, iinfo->src_regs[i].type);
-    }
+//     sp_state.current_idx = -1;
+// }
 
-    uint8_t num_dst = MIN(iinfo->num_dst_regs, NUM_INSTR_DESTINATIONS);
-    for (int i = 0; i < num_dst; i++) {
-        trace.destination_registers[i] = remap_regid(
-            iinfo->dst_regs[i].reg_id, iinfo->dst_regs[i].type);
-    }
+// static bool handle_pc_simpoints(CPUArchState *env,
+//                                 cpu_log_instr_state_t *cpulog,
+//                                 cpu_log_instr_info_t *iinfo)
+// {
+//     if (iinfo->pc != 0) {
+//         if (!pc_exec_count_map) {
+//             pc_exec_count_map = g_hash_table_new_full(
+//                 g_direct_hash, g_direct_equal, NULL, g_free);
+//         }
 
-    return trace;
-}
+//         uint64_t *count = g_hash_table_lookup(pc_exec_count_map,
+//                                               GSIZE_TO_POINTER(iinfo->pc));
+//         if (!count) {
+//             count = g_malloc0(sizeof(uint64_t));
+//             g_hash_table_insert(pc_exec_count_map,
+//                                 GSIZE_TO_POINTER(iinfo->pc), count);
+//         }
 
-static void track_cap_store(CPUArchState *env, cpu_log_instr_info_t *iinfo)
-{
-    init_cap_store_tracker();
+//         if (!sp_state.tracing) {
+//             for (int i = 0; i < simpoint_pcs->len; i++) {
+//                 simpoint_pc_entry_t *entry = &g_array_index(simpoint_pcs,
+//                                                             simpoint_pc_entry_t, i);
+//                 if (iinfo->pc == entry->pc && *count == entry->execution_count) {
+//                     if (!sp_state.file_open)
+//                         simpoint_open_trace(env, i, false);
+//                     sp_state.tracing          = true;
+//                     sp_state.current_idx      = i;
+//                     cpulog->simpoint_insn_count = 0;
+//                     fprintf(stderr, "Simpoint %d triggered, tracing starts\n", i);
+//                     break;
+//                 }
+//             }
+//         }
 
-    for (int i = 0; i < iinfo->mem->len; i++) {
-        log_meminfo_t *minfo = &g_array_index(iinfo->mem, log_meminfo_t, i);
+//         (*count)++;
+//     }
 
-        if ((minfo->flags & LMI_ST) && (minfo->flags & LMI_CAP)) {
-            uint64_t addr = minfo->addr;
+//     if (sp_state.tracing) {
+//         if (cpulog->simpoint_insn_count >= INTERVAL_SIZE) {
+// #ifdef TARGET_CHERI
+//             int ended_idx = sp_state.current_idx;
+// #endif
+//             simpoint_end(simpoint_pcs->len - 1);
+//             cpulog->simpoint_insn_count = 0;
+// #ifdef TARGET_CHERI
+//             if (!sp_state.stop && trace_format == &trace_formats[4]) {
+//                 int next_idx = ended_idx + 1;
+//                 if (next_idx < simpoint_pcs->len)
+//                     simpoint_open_trace(env, next_idx, false);
+//             }
+// #endif
+//             return false;
+//         }
+//         cpulog->simpoint_insn_count++;
+//         return true;
+//     }
 
-            cap_store_entry_t *entry = g_new(cap_store_entry_t, 1);
-            entry->addr  = addr;
-            entry->trace = build_cheri_trace_entry(iinfo, minfo);
+// #ifdef TARGET_CHERI
+//     if (trace_format == &trace_formats[4]) {
+//         if (!sp_state.file_open && !sp_state.stop)
+//             simpoint_open_trace(env, 0, false);
+//         if (sp_state.file_open)
+//             return true;
+//     }
+// #endif
+//     return false;
+// }
 
-            /* last-writer-wins; old entry freed automatically */
-            g_hash_table_replace(cap_store_tracker,
-                                 GSIZE_TO_POINTER(addr), entry);
-            break;
-        }
+// static interval_match_t find_active_interval(uint64_t instr_count)
+// {
+//     interval_match_t m = { .should_trace = false, .is_warmup = false, .idx = -1 };
 
-        /* Non-capability store overwrites a tracked location → invalidate */
-        if ((minfo->flags & LMI_ST) && !(minfo->flags & LMI_CAP)) {
-            g_hash_table_remove(cap_store_tracker,
-                                GSIZE_TO_POINTER(minfo->addr));
-        }
-    }
-}
+//     for (int i = 0; i < simpoints->len; i++) {
+//         uint64_t adj_start = g_array_index(adjusted_simpoints, uint64_t, i);
+//         uint64_t start     = g_array_index(simpoints, uint64_t, i);
+//         uint64_t warmup_len = g_array_index(warmup_duration, uint64_t, i);
+//         uint64_t end       = start + INTERVAL_SIZE - 1;
 
-static void emit_all_tracked_cap_stores(CPUArchState *env)
-{
-    if (!cap_store_tracker) return;
+//         if (instr_count >= adj_start && instr_count <= end) {
+//             m.should_trace = true;
+//             m.idx          = i;
+//             m.is_warmup    = (warmup_len > 0 && instr_count < start);
+//             return m;
+//         }
+//     }
+//     return m;
+// }
 
-    fprintf(stderr, "Emitting %u tracked capability stores at SimPoint start\n",
-            g_hash_table_size(cap_store_tracker));
+// static bool handle_interval_simpoints(CPUArchState *env,
+//                                       cpu_log_instr_info_t *iinfo)
+// {
+//     interval_match_t m = find_active_interval(sp_state.instr_count);
+//     sp_state.instr_count++;
 
-    FILE *logfile = qemu_log_lock();
+//     if (m.should_trace) {
+//         if (!sp_state.tracing) {
+//             if (!sp_state.file_open)
+//                 simpoint_open_trace(env, m.idx, m.is_warmup);
+//             sp_state.tracing     = true;
+//             sp_state.in_warmup   = m.is_warmup;
+//             sp_state.current_idx = m.idx;
 
-    GHashTableIter iter;
-    gpointer key, value;
-    g_hash_table_iter_init(&iter, cap_store_tracker);
+//         } else if (m.idx != sp_state.current_idx) {
+//             fprintf(stderr, "Switching from simpoint %d to %d (warmup: %s)\n",
+//                     sp_state.current_idx, m.idx, m.is_warmup ? "yes" : "no");
+//             simpoint_open_trace(env, m.idx, m.is_warmup);
+//             sp_state.current_idx = m.idx;
+//             sp_state.in_warmup   = m.is_warmup;
 
-    while (g_hash_table_iter_next(&iter, &key, &value)) {
-        cap_store_entry_t *entry = (cap_store_entry_t *)value;
-        fwrite(&entry->trace, sizeof(entry->trace), 1, logfile);
-    }
+//         } else if (sp_state.in_warmup && !m.is_warmup) {
+//             fprintf(stderr, "Ending warmup for simpoint %d\n", sp_state.current_idx);
+//             sp_state.in_warmup = false;
+//         }
 
-    qemu_log_unlock(logfile);
+//         return true;
 
-    g_hash_table_remove_all(cap_store_tracker);
-}
-#endif
+//     } else if (sp_state.tracing) {
+// #ifdef TARGET_CHERI
+//         int ended_idx = sp_state.current_idx;
+// #endif
+//         simpoint_end(simpoints->len - 1);
+
+// #ifdef TARGET_CHERI
+//         if (!sp_state.stop && trace_format == &trace_formats[4]) {
+//             int next_idx = ended_idx + 1;
+//             if (next_idx < simpoints->len)
+//                 simpoint_open_trace(env, next_idx, false);
+//         }
+// #endif
+//     }
+
+//     if (!sp_state.tracing && !sp_state.stop) {
+//         uint64_t last_end = g_array_index(simpoints, uint64_t, simpoints->len - 1)
+//                             + INTERVAL_SIZE;
+//         if (sp_state.instr_count > last_end)
+//             sp_state.stop = true;
+//     }
+
+// #ifdef TARGET_CHERI
+//     if (trace_format == &trace_formats[4]) {
+//         if (!sp_state.file_open && !sp_state.stop)
+//             simpoint_open_trace(env, 0, false);
+//         if (sp_state.file_open)
+//             return true;
+//     }
+// #endif
+//     return false;
+// }
+
 
 
 static void simpoint_open_trace(CPUArchState *env, int idx, bool is_warmup)
 {
     char filename[256];
+
+#ifdef TARGET_CHERI
+    if (trace_format == &trace_formats[4] && preopen_simpoint_idx == idx) {
+        fprintf(stderr, "Starting simpoint %d (warmup: %s), file already open\n",
+                idx, is_warmup ? "yes" : "no");
+        flush_cap_store_tracker(env);
+        preopen_simpoint_idx = -1;
+        return;
+    }
+#endif
 
     if (sp_state.file_open)
         qemu_log_close();
@@ -1224,7 +1377,7 @@ static void simpoint_open_trace(CPUArchState *env, int idx, bool is_warmup)
 
 #ifdef TARGET_CHERI
     if (trace_format == &trace_formats[4])
-        emit_all_tracked_cap_stores(env);
+        flush_cap_store_tracker(env);
 #endif
 }
 
@@ -1234,12 +1387,26 @@ static void simpoint_close_trace(void)
         qemu_log_close();
         sp_state.file_open = false;
     }
+#ifdef TARGET_CHERI
+    preopen_simpoint_idx = -1;
+#endif
 }
 
-static void simpoint_end(int last_idx)
+static void simpoint_end(CPUArchState *env, int last_idx)
 {
     fprintf(stderr, "Ending simpoint %d\n", sp_state.current_idx);
+
+#ifdef TARGET_CHERI
+    if (trace_format == &trace_formats[4] &&
+        sp_state.current_idx < last_idx && simpoints != NULL) {
+        preopen_trace_for_cap_stores(sp_state.current_idx + 1);
+    } else {
+        simpoint_close_trace();
+    }
+#else
     simpoint_close_trace();
+#endif
+
     sp_state.tracing    = false;
     sp_state.in_warmup  = false;
 
@@ -1247,61 +1414,6 @@ static void simpoint_end(int last_idx)
         sp_state.stop = true;
 
     sp_state.current_idx = -1;
-}
-
-static bool handle_pc_simpoints(CPUArchState *env,
-                                cpu_log_instr_state_t *cpulog,
-                                cpu_log_instr_info_t *iinfo)
-{
-    /* Only check triggers and update execution counts if PC is valid */
-    if (iinfo->pc != 0) {
-        if (!pc_exec_count_map) {
-            pc_exec_count_map = g_hash_table_new_full(
-                g_direct_hash, g_direct_equal, NULL, g_free);
-        }
-
-        uint64_t *count = g_hash_table_lookup(pc_exec_count_map,
-                                              GSIZE_TO_POINTER(iinfo->pc));
-        if (!count) {
-            count = g_malloc0(sizeof(uint64_t));
-            g_hash_table_insert(pc_exec_count_map,
-                                GSIZE_TO_POINTER(iinfo->pc), count);
-        }
-
-        /* Try to start a new simpoint (check BEFORE incrementing count) */
-        if (!sp_state.tracing) {
-            for (int i = 0; i < simpoint_pcs->len; i++) {
-                simpoint_pc_entry_t *entry = &g_array_index(simpoint_pcs,
-                                                            simpoint_pc_entry_t, i);
-                if (iinfo->pc == entry->pc && *count == entry->execution_count) {
-                    simpoint_open_trace(env, i, false);
-                    sp_state.tracing          = true;
-                    sp_state.current_idx      = i;
-                    cpulog->simpoint_insn_count = 0;
-                    break;
-                }
-            }
-        }
-
-        (*count)++;
-    }
-
-    /* If tracing, enforce interval length (Happens for ALL instructions, even pc == 0) */
-    if (sp_state.tracing) {
-        if (cpulog->simpoint_insn_count >= INTERVAL_SIZE) {
-            simpoint_end(simpoint_pcs->len - 1);
-            cpulog->simpoint_insn_count = 0;
-            return false;
-        }
-        cpulog->simpoint_insn_count++;
-        return true;  /* emit this instruction */
-    }
-
-#ifdef TARGET_CHERI
-    if (trace_format == &trace_formats[4])
-        track_cap_store(env, iinfo);
-#endif
-    return false;
 }
 
 static interval_match_t find_active_interval(uint64_t instr_count)
@@ -1327,8 +1439,32 @@ static interval_match_t find_active_interval(uint64_t instr_count)
 static bool handle_interval_simpoints(CPUArchState *env,
                                       cpu_log_instr_info_t *iinfo)
 {
+#ifdef TARGET_CHERI
+    /*
+     * On first call, pre-open simpoint_0.trace so cap stores can be
+     * flushed before the first SimPoint triggers.
+     */
+    static bool first_file_opened = false;
+    if (!first_file_opened) {
+        if (trace_format == &trace_formats[4])
+            preopen_trace_for_cap_stores(0);
+        first_file_opened = true;
+    }
+#endif
+
     interval_match_t m = find_active_interval(sp_state.instr_count);
     sp_state.instr_count++;
+
+#ifdef TARGET_CHERI
+    /*
+     * Always track cap stores — during tracing AND between simpoints.
+     * Only allow periodic flushing when NOT tracing, because during
+     * tracing the stores belong to the next simpoint's preamble and
+     * that file isn't open yet.
+     */
+    if (trace_format == &trace_formats[4])
+        track_cap_store(env, iinfo, /*allow_flush=*/!sp_state.tracing);
+#endif
 
     if (m.should_trace) {
         if (!sp_state.tracing) {
@@ -1339,7 +1475,7 @@ static bool handle_interval_simpoints(CPUArchState *env,
             sp_state.current_idx = m.idx;
 
         } else if (m.idx != sp_state.current_idx) {
-            /* Switching between simpoints */
+            /* Switching between adjacent/overlapping simpoints */
             fprintf(stderr, "Switching from simpoint %d to %d (warmup: %s)\n",
                     sp_state.current_idx, m.idx, m.is_warmup ? "yes" : "no");
             simpoint_open_trace(env, m.idx, m.is_warmup);
@@ -1355,24 +1491,74 @@ static bool handle_interval_simpoints(CPUArchState *env,
         return true;  /* emit this instruction */
 
     } else if (sp_state.tracing) {
-        simpoint_end(simpoints->len - 1);
+        /* Exited simpoint range — end it and pre-open next file */
+        simpoint_end(env, simpoints->len - 1);
+    }
 
-    } 
-
-    /* Early stop — independent check, not chained */
+    /* Early stop check */
     if (!sp_state.tracing && !sp_state.stop) {
         uint64_t last_end = g_array_index(simpoints, uint64_t, simpoints->len - 1)
-                            + INTERVAL_SIZE;
+                          + INTERVAL_SIZE;
         if (sp_state.instr_count > last_end)
             sp_state.stop = true;
     }
 
-#ifdef TARGET_CHERI
-    track_cap_store(env, iinfo);
-#endif
     return false;
 }
 
+
+static bool handle_pc_simpoints(CPUArchState *env,
+                                cpu_log_instr_state_t *cpulog,
+                                cpu_log_instr_info_t *iinfo)
+{
+    if (iinfo->pc != 0) {
+        if (!pc_exec_count_map) {
+            pc_exec_count_map = g_hash_table_new_full(
+                g_direct_hash, g_direct_equal, NULL, g_free);
+        }
+
+        uint64_t *count = g_hash_table_lookup(pc_exec_count_map,
+                                              GSIZE_TO_POINTER(iinfo->pc));
+        if (!count) {
+            count = g_malloc0(sizeof(uint64_t));
+            g_hash_table_insert(pc_exec_count_map,
+                               GSIZE_TO_POINTER(iinfo->pc), count);
+        }
+
+        if (!sp_state.tracing) {
+            for (int i = 0; i < simpoint_pcs->len; i++) {
+                simpoint_pc_entry_t *entry = &g_array_index(simpoint_pcs,
+                                                           simpoint_pc_entry_t, i);
+                if (iinfo->pc == entry->pc && *count == entry->execution_count) {
+                    simpoint_open_trace(env, i, false);
+                    sp_state.tracing          = true;
+                    sp_state.current_idx      = i;
+                    cpulog->simpoint_insn_count = 0;
+                    break;
+                }
+            }
+        }
+
+        (*count)++;
+    }
+
+#ifdef TARGET_CHERI
+    if (trace_format == &trace_formats[4])
+        track_cap_store(env, iinfo, /*allow_flush=*/false);
+#endif
+
+    if (sp_state.tracing) {
+        if (cpulog->simpoint_insn_count >= INTERVAL_SIZE) {
+            simpoint_end(env, simpoint_pcs->len - 1);
+            cpulog->simpoint_insn_count = 0;
+            return false;
+        }
+        cpulog->simpoint_insn_count++;
+        return true;  /* emit this instruction */
+    }
+
+    return false;
+}
 
 static void emit_with_dfilter(CPUArchState *env, cpu_log_instr_info_t *iinfo)
 {

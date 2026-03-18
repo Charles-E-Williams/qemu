@@ -164,6 +164,24 @@ typedef struct {
     uint64_t warmup_length;      /* Warmup duration */
 } simpoint_interval_entry_t;
 
+
+static struct {
+    uint64_t instr_count;
+    int      current_idx;
+    bool     tracing;
+    bool     in_warmup;
+    bool     stop;
+    bool     started;
+    bool     file_open;
+} sp_state = { .current_idx = -1 };
+
+
+typedef struct {
+    bool should_trace;
+    bool is_warmup;
+    int  idx;
+} interval_match_t;
+
 /*
  * Per-cpu logging state.
  */

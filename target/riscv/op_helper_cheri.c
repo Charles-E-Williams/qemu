@@ -247,6 +247,13 @@ void HELPER(amoswap_cap)(CPUArchState *env, uint32_t dest_reg,
     }
     const cap_register_t *cbp = get_load_store_base_cap(env, addr_reg);
 
+
+#if defined(CONFIG_TCG_LOG_INSTR)
+    if (qemu_log_instr_enabled(env)) {
+        qemu_log_instr_mem_auth_cap(env, cbp, addr_reg);
+    }
+#endif
+
     if (!cbp->cr_tag) {
         raise_cheri_exception(env, CapEx_TagViolation, addr_reg);
     } else if (!cap_is_unsealed(cbp)) {
@@ -298,6 +305,13 @@ static void lr_c_impl(CPUArchState *env, uint32_t dest_reg, uint32_t auth_reg,
            (cpu_in_exclusive_context(env_cpu(env)) &&
             "Should have raised EXCP_ATOMIC"));
     const cap_register_t *cbp = get_load_store_base_cap(env, auth_reg);
+    
+#if defined(CONFIG_TCG_LOG_INSTR)
+    if (qemu_log_instr_enabled(env)) {
+        qemu_log_instr_mem_auth_cap(env, cbp, auth_reg);
+    }
+#endif
+
     if (!cbp->cr_tag) {
         raise_cheri_exception(env, CapEx_TagViolation, auth_reg);
     } else if (!cap_is_unsealed(cbp)) {
