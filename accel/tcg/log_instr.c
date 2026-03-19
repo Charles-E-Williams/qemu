@@ -2008,6 +2008,10 @@ void qemu_log_simpoint_count_tb(CPUArchState *env, target_ulong tb_pc,
 {
     CPUState *cpu = env_cpu(env);
 
+    // if (sp_state.instr_count >= 1000ULL) {
+    //     fprintf(stderr, "icount=%" PRIu64 "\n", sp_state.instr_count);
+    //     }
+
     switch (sp_state.mode) {
 
     case SIMPOINT_MODE_WAIT_START_PC: {

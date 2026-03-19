@@ -686,6 +686,7 @@ static inline void cpu_loop_exec_tb(CPUState *cpu, TranslationBlock *tb,
     trace_exec_tb(tb, tb->pc);
     tb = cpu_tb_exec(cpu, tb, tb_exit);
     if (*tb_exit != TB_EXIT_REQUESTED) {
+
         if (unlikely(qemu_simpoint_counting_active()))
             *last_tb = NULL;
         else

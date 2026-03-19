@@ -158,6 +158,11 @@ const void *HELPER(lookup_tb_ptr)(CPUArchState *env)
     uint32_t cheri_flags = 0;
     uint32_t flags;
 
+    /* Force return to cpu_tb_exec so per-TB simpoint counting fires */
+    if (unlikely(qemu_simpoint_counting_active())) {
+        return tcg_code_gen_epilogue;
+    }
+
     cpu_get_tb_cpu_state_6(env, &pc, &cs_base, &cs_top, &cheri_flags, &flags);
 
     tb = tb_lookup(cpu, pc, cs_base, cs_top, cheri_flags, flags, curr_cflags(cpu));
