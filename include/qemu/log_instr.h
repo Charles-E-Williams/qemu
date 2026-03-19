@@ -151,7 +151,6 @@ typedef struct {
 } qemu_log_reg_info;
 
 
-
 /* SimPoint entry structures */
 typedef struct {
     uint64_t pc;              /* PC address to trigger on */
@@ -165,16 +164,22 @@ typedef struct {
 } simpoint_interval_entry_t;
 
 
+typedef enum {
+    SIMPOINT_MODE_INACTIVE = 0,    /* No simpoint tracing active */
+    SIMPOINT_MODE_WAIT_START_PC,   /* Waiting for START_PC, per-TB PC check */
+    SIMPOINT_MODE_COUNTING,        /* Counting instructions per-TB, no CF_LOG_INSTR */
+    SIMPOINT_MODE_TRACING,         /* Inside simpoint region, CF_LOG_INSTR on */
+} simpoint_mode_t;
+
+
 static struct {
     uint64_t instr_count;
     int      current_idx;
-    bool     tracing;
     bool     in_warmup;
     bool     stop;
-    bool     started;
     bool     file_open;
-} sp_state = { .current_idx = -1 };
-
+    simpoint_mode_t mode;
+} sp_state = { .current_idx = -1, .mode = SIMPOINT_MODE_INACTIVE};
 
 typedef struct {
     bool should_trace;

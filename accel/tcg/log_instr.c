@@ -47,6 +47,7 @@
 #include "tcg/tcg.h"
 #include "tcg/tcg-op.h"
 #include "qapi/error.h"
+#include "sysemu/runstate.h"
 
 /*
  * CHERI common instruction logging.
@@ -104,6 +105,7 @@ extern uint64_t INTERVAL_SIZE;
 extern uint64_t WARMUP_INTERVAL;
 extern uint64_t START_PC; 
 static GHashTable *pc_exec_count_map = NULL;
+
 
 /*
  * Instruction log info associated with each committed log entry.
@@ -716,38 +718,22 @@ static void emit_champsim_entry(CPUArchState *env, cpu_log_instr_info_t *iinfo)
 
     for (int i = 0; i < iinfo->mem->len; i++) {
         log_meminfo_t *minfo = &g_array_index(iinfo->mem, log_meminfo_t, i);
-
         uint64_t address = minfo->addr;
         uint8_t access_size = memop_size(minfo->op);
-
-        //checks if the address spans multiple cache lines
-        uint64_t cacheline_access_ini = address & ~CACHE_LINE_MASK;
-        uint64_t cacheline_access_end = (address + access_size - 1) & ~CACHE_LINE_MASK;
-        bool spans_two_cachelines = (cacheline_access_ini != cacheline_access_end);
+        uint64_t cl_start = address & ~CACHE_LINE_MASK;
+        uint64_t cl_end = (address + access_size - 1) & ~CACHE_LINE_MASK;
+        bool spans = (cl_start != cl_end);
 
         if (minfo->flags & LMI_LD) {
-            if (source_mem_idx < NUM_INSTR_SOURCES) {
-                trace.source_memory[source_mem_idx] = address;
-                source_mem_idx++; 
-            } 
-            if (spans_two_cachelines) {
-                if (source_mem_idx < NUM_INSTR_SOURCES) {
-                    trace.source_memory[source_mem_idx] = cacheline_access_end;
-                    source_mem_idx++;
-                }
-            }
-
+            if (source_mem_idx < NUM_INSTR_SOURCES)
+                trace.source_memory[source_mem_idx++] = address;
+            if (spans && source_mem_idx < NUM_INSTR_SOURCES)
+                trace.source_memory[source_mem_idx++] = cl_end;
         } else if (minfo->flags & LMI_ST) {
-            if (dest_mem_idx < NUM_INSTR_DESTINATIONS) {
-                trace.destination_memory[dest_mem_idx] = address;
-                dest_mem_idx++;
-            }
-            if (spans_two_cachelines) {
-                if (dest_mem_idx < NUM_INSTR_DESTINATIONS) {
-                    trace.destination_memory[dest_mem_idx] = cacheline_access_end;
-                    dest_mem_idx++;
-                }
-            }
+            if (dest_mem_idx < NUM_INSTR_DESTINATIONS)
+                trace.destination_memory[dest_mem_idx++] = address;
+            if (spans && dest_mem_idx < NUM_INSTR_DESTINATIONS)
+                trace.destination_memory[dest_mem_idx++] = cl_end;
         }
     }
     
@@ -795,44 +781,19 @@ static void emit_champsim_entry(CPUArchState *env, cpu_log_instr_info_t *iinfo)
             default:
                 assert(false && "Error: Unrecognized branch type\n");
         }
-
-        logfile = qemu_log_lock();
-        fwrite(&trace, sizeof(trace), 1, logfile);
-        qemu_log_unlock(logfile);
-        // qemu_log("IP: 0x%016" PRIx64 " | BRANCH | TAKEN: %d\n"
-        //             "  REG SRC: [%2d, %2d, %2d, %2d] | REG DST: [%2d, %2d]\n",
-        //             trace.ip,
-        //             trace.branch_taken,
-        //             trace.source_registers[0], trace.source_registers[1], trace.source_registers[2], trace.source_registers[3],
-        //             trace.destination_registers[0], trace.destination_registers[1]);
-        // qemu_log("BRANCH TYPE | %d\n", iinfo->branch_type);
-        return;
+    } else {
+        uint8_t num_src = MIN(iinfo->num_src_regs, NUM_INSTR_SOURCES);
+        for (int i = 0; i < num_src; i++) 
+            trace.source_registers[i] = remap_regid(iinfo->src_regs[i].reg_id, iinfo->src_regs[i].type);
+        
+        uint8_t num_dst = MIN(iinfo->num_dst_regs, NUM_INSTR_DESTINATIONS);
+        for (int i = 0; i < num_dst; i++) 
+            trace.destination_registers[i] = remap_regid(iinfo->dst_regs[i].reg_id, iinfo->dst_regs[i].type); 
     }
-
-    uint8_t num_src = MIN(iinfo->num_src_regs, NUM_INSTR_SOURCES);
-    for (int i = 0; i < num_src; i++) {
-        trace.source_registers[i] = remap_regid(iinfo->src_regs[i].reg_id, iinfo->src_regs[i].type);
-    }
-
-    uint8_t num_dst = MIN(iinfo->num_dst_regs, NUM_INSTR_DESTINATIONS);
-    for (int i = 0; i < num_dst; i++) {
-        trace.destination_registers[i] = remap_regid(iinfo->dst_regs[i].reg_id, iinfo->dst_regs[i].type);
-    }
-
-
 
     logfile = qemu_log_lock();
     fwrite(&trace, sizeof(trace), 1, logfile);
     qemu_log_unlock(logfile);
-
-            // qemu_log("IP: 0x%016" PRIx64 " |\n"
-            //         "  REG SRC: [%2d, %2d, %2d, %2d] | REG DST: [%2d, %2d]\n"
-            //         "  MEM SRC: [0x%016" PRIx64 ", 0x%016" PRIx64 ", 0x%016" PRIx64 ", 0x%016" PRIx64 "] | MEM DST: [0x%016" PRIx64 ", 0x%016" PRIx64 "]\n",
-            //         trace.ip,
-            //         trace.source_registers[0], trace.source_registers[1], trace.source_registers[2], trace.source_registers[3],
-            //         trace.destination_registers[0], trace.destination_registers[1],
-            //         trace.source_memory[0], trace.source_memory[1], trace.source_memory[2], trace.source_memory[3],
-            //         trace.destination_memory[0], trace.destination_memory[1]);
 }
 
 static void emit_champsim_start(CPUArchState *env, target_ulong pc)
@@ -1165,192 +1126,6 @@ static void reset_log_buffer(cpu_log_instr_state_t *cpulog,
     cpulog->starting = false;
 }
 
-// static void simpoint_open_trace(CPUArchState *env, int idx, bool is_warmup)
-// {
-//     char filename[256];
-
-//     if (sp_state.file_open)
-//         qemu_log_close();
-
-//     snprintf(filename, sizeof(filename), "simpoint_%d.trace", idx);
-//     fprintf(stderr, "Starting simpoint %d (warmup: %s), output: %s\n",
-//             idx, is_warmup ? "yes" : "no", filename);
-//     qemu_set_log_filename(filename, &error_fatal);
-//     sp_state.file_open = true;
-
-// }
-
-// static void simpoint_close_trace(void)
-// {
-//     if (sp_state.file_open) {
-//         qemu_log_close();
-//         sp_state.file_open = false;
-//     }
-// }
-
-// static void simpoint_end(int last_idx)
-// {
-//     fprintf(stderr, "Ending simpoint %d\n", sp_state.current_idx);
-//     simpoint_close_trace();
-//     sp_state.tracing    = false;
-//     sp_state.in_warmup  = false;
-
-//     if (sp_state.current_idx == last_idx)
-//         sp_state.stop = true;
-
-//     sp_state.current_idx = -1;
-// }
-
-// static bool handle_pc_simpoints(CPUArchState *env,
-//                                 cpu_log_instr_state_t *cpulog,
-//                                 cpu_log_instr_info_t *iinfo)
-// {
-//     if (iinfo->pc != 0) {
-//         if (!pc_exec_count_map) {
-//             pc_exec_count_map = g_hash_table_new_full(
-//                 g_direct_hash, g_direct_equal, NULL, g_free);
-//         }
-
-//         uint64_t *count = g_hash_table_lookup(pc_exec_count_map,
-//                                               GSIZE_TO_POINTER(iinfo->pc));
-//         if (!count) {
-//             count = g_malloc0(sizeof(uint64_t));
-//             g_hash_table_insert(pc_exec_count_map,
-//                                 GSIZE_TO_POINTER(iinfo->pc), count);
-//         }
-
-//         if (!sp_state.tracing) {
-//             for (int i = 0; i < simpoint_pcs->len; i++) {
-//                 simpoint_pc_entry_t *entry = &g_array_index(simpoint_pcs,
-//                                                             simpoint_pc_entry_t, i);
-//                 if (iinfo->pc == entry->pc && *count == entry->execution_count) {
-//                     if (!sp_state.file_open)
-//                         simpoint_open_trace(env, i, false);
-//                     sp_state.tracing          = true;
-//                     sp_state.current_idx      = i;
-//                     cpulog->simpoint_insn_count = 0;
-//                     fprintf(stderr, "Simpoint %d triggered, tracing starts\n", i);
-//                     break;
-//                 }
-//             }
-//         }
-
-//         (*count)++;
-//     }
-
-//     if (sp_state.tracing) {
-//         if (cpulog->simpoint_insn_count >= INTERVAL_SIZE) {
-// #ifdef TARGET_CHERI
-//             int ended_idx = sp_state.current_idx;
-// #endif
-//             simpoint_end(simpoint_pcs->len - 1);
-//             cpulog->simpoint_insn_count = 0;
-// #ifdef TARGET_CHERI
-//             if (!sp_state.stop && trace_format == &trace_formats[4]) {
-//                 int next_idx = ended_idx + 1;
-//                 if (next_idx < simpoint_pcs->len)
-//                     simpoint_open_trace(env, next_idx, false);
-//             }
-// #endif
-//             return false;
-//         }
-//         cpulog->simpoint_insn_count++;
-//         return true;
-//     }
-
-// #ifdef TARGET_CHERI
-//     if (trace_format == &trace_formats[4]) {
-//         if (!sp_state.file_open && !sp_state.stop)
-//             simpoint_open_trace(env, 0, false);
-//         if (sp_state.file_open)
-//             return true;
-//     }
-// #endif
-//     return false;
-// }
-
-// static interval_match_t find_active_interval(uint64_t instr_count)
-// {
-//     interval_match_t m = { .should_trace = false, .is_warmup = false, .idx = -1 };
-
-//     for (int i = 0; i < simpoints->len; i++) {
-//         uint64_t adj_start = g_array_index(adjusted_simpoints, uint64_t, i);
-//         uint64_t start     = g_array_index(simpoints, uint64_t, i);
-//         uint64_t warmup_len = g_array_index(warmup_duration, uint64_t, i);
-//         uint64_t end       = start + INTERVAL_SIZE - 1;
-
-//         if (instr_count >= adj_start && instr_count <= end) {
-//             m.should_trace = true;
-//             m.idx          = i;
-//             m.is_warmup    = (warmup_len > 0 && instr_count < start);
-//             return m;
-//         }
-//     }
-//     return m;
-// }
-
-// static bool handle_interval_simpoints(CPUArchState *env,
-//                                       cpu_log_instr_info_t *iinfo)
-// {
-//     interval_match_t m = find_active_interval(sp_state.instr_count);
-//     sp_state.instr_count++;
-
-//     if (m.should_trace) {
-//         if (!sp_state.tracing) {
-//             if (!sp_state.file_open)
-//                 simpoint_open_trace(env, m.idx, m.is_warmup);
-//             sp_state.tracing     = true;
-//             sp_state.in_warmup   = m.is_warmup;
-//             sp_state.current_idx = m.idx;
-
-//         } else if (m.idx != sp_state.current_idx) {
-//             fprintf(stderr, "Switching from simpoint %d to %d (warmup: %s)\n",
-//                     sp_state.current_idx, m.idx, m.is_warmup ? "yes" : "no");
-//             simpoint_open_trace(env, m.idx, m.is_warmup);
-//             sp_state.current_idx = m.idx;
-//             sp_state.in_warmup   = m.is_warmup;
-
-//         } else if (sp_state.in_warmup && !m.is_warmup) {
-//             fprintf(stderr, "Ending warmup for simpoint %d\n", sp_state.current_idx);
-//             sp_state.in_warmup = false;
-//         }
-
-//         return true;
-
-//     } else if (sp_state.tracing) {
-// #ifdef TARGET_CHERI
-//         int ended_idx = sp_state.current_idx;
-// #endif
-//         simpoint_end(simpoints->len - 1);
-
-// #ifdef TARGET_CHERI
-//         if (!sp_state.stop && trace_format == &trace_formats[4]) {
-//             int next_idx = ended_idx + 1;
-//             if (next_idx < simpoints->len)
-//                 simpoint_open_trace(env, next_idx, false);
-//         }
-// #endif
-//     }
-
-//     if (!sp_state.tracing && !sp_state.stop) {
-//         uint64_t last_end = g_array_index(simpoints, uint64_t, simpoints->len - 1)
-//                             + INTERVAL_SIZE;
-//         if (sp_state.instr_count > last_end)
-//             sp_state.stop = true;
-//     }
-
-// #ifdef TARGET_CHERI
-//     if (trace_format == &trace_formats[4]) {
-//         if (!sp_state.file_open && !sp_state.stop)
-//             simpoint_open_trace(env, 0, false);
-//         if (sp_state.file_open)
-//             return true;
-//     }
-// #endif
-//     return false;
-// }
-
-
 
 static void simpoint_open_trace(CPUArchState *env, int idx, bool is_warmup)
 {
@@ -1407,7 +1182,6 @@ static void simpoint_end(CPUArchState *env, int last_idx)
     simpoint_close_trace();
 #endif
 
-    sp_state.tracing    = false;
     sp_state.in_warmup  = false;
 
     if (sp_state.current_idx == last_idx)
@@ -1436,13 +1210,31 @@ static interval_match_t find_active_interval(uint64_t instr_count)
     return m;
 }
 
+
+static void cpu_loglevel_switch(CPUArchState *env, qemu_log_instr_loglevel_t level);
+static void global_loglevel_enable(void);
+
 static bool handle_interval_simpoints(CPUArchState *env,
                                       cpu_log_instr_info_t *iinfo)
 {
+    /*
+     * This function is ONLY called when CF_LOG_INSTR is active,
+     * which means sp_state.mode == SIMPOINT_MODE_TRACING.
+     *
+     * The per-TB counting path in cpu_tb_exec handles COUNTING
+     * and WAIT_START_PC modes. When it detects a simpoint boundary,
+     * it enables CF_LOG_INSTR and sets mode = TRACING, at which
+     * point this function takes over with per-instruction granularity.
+     *
+     * For CHERI: CF_LOG_INSTR may also be on during COUNTING mode
+     * for cap store tracking. In that case, do_instr_commit
+     * short-circuits before reaching this function.
+     */
+
 #ifdef TARGET_CHERI
     /*
      * On first call, pre-open simpoint_0.trace so cap stores can be
-     * flushed before the first SimPoint triggers.
+     * flushed before the first simpoint triggers.
      */
     static bool first_file_opened = false;
     if (!first_file_opened) {
@@ -1458,49 +1250,87 @@ static bool handle_interval_simpoints(CPUArchState *env,
 #ifdef TARGET_CHERI
     /*
      * Always track cap stores — during tracing AND between simpoints.
-     * Only allow periodic flushing when NOT tracing, because during
-     * tracing the stores belong to the next simpoint's preamble and
-     * that file isn't open yet.
+     * Only allow periodic flushing when NOT actively tracing, because
+     * during tracing the stores belong to the next simpoint's preamble
+     * and that file isn't open yet.
      */
     if (trace_format == &trace_formats[4])
-        track_cap_store(env, iinfo, /*allow_flush=*/!sp_state.tracing);
+        track_cap_store(env, iinfo,
+                        /*allow_flush=*/sp_state.mode != SIMPOINT_MODE_TRACING);
 #endif
 
     if (m.should_trace) {
-        if (!sp_state.tracing) {
-            /* Starting a new simpoint */
+        if (sp_state.mode != SIMPOINT_MODE_TRACING) {
+            /*
+             * Starting a new simpoint. Normally the per-TB path
+             * already transitioned us, but handle the edge case
+             * where CF_LOG_INSTR was already on (CHERI cap tracking).
+             */
             simpoint_open_trace(env, m.idx, m.is_warmup);
-            sp_state.tracing     = true;
+            sp_state.mode        = SIMPOINT_MODE_TRACING;
             sp_state.in_warmup   = m.is_warmup;
             sp_state.current_idx = m.idx;
 
         } else if (m.idx != sp_state.current_idx) {
             /* Switching between adjacent/overlapping simpoints */
             fprintf(stderr, "Switching from simpoint %d to %d (warmup: %s)\n",
-                    sp_state.current_idx, m.idx, m.is_warmup ? "yes" : "no");
+                    sp_state.current_idx, m.idx,
+                    m.is_warmup ? "yes" : "no");
             simpoint_open_trace(env, m.idx, m.is_warmup);
             sp_state.current_idx = m.idx;
             sp_state.in_warmup   = m.is_warmup;
 
         } else if (sp_state.in_warmup && !m.is_warmup) {
             /* Warmup → real tracing within same simpoint */
-            fprintf(stderr, "Ending warmup for simpoint %d\n", sp_state.current_idx);
+            fprintf(stderr, "Ending warmup for simpoint %d\n",
+                    sp_state.current_idx);
             sp_state.in_warmup = false;
         }
 
         return true;  /* emit this instruction */
 
-    } else if (sp_state.tracing) {
-        /* Exited simpoint range — end it and pre-open next file */
+    } else if (sp_state.mode == SIMPOINT_MODE_TRACING) {
+        /*
+         * Exited the simpoint region. Close the trace and transition
+         * back to lightweight counting mode.
+         */
+        int finished_idx = sp_state.current_idx;
         simpoint_end(env, simpoints->len - 1);
-    }
 
-    /* Early stop check */
-    if (!sp_state.tracing && !sp_state.stop) {
-        uint64_t last_end = g_array_index(simpoints, uint64_t, simpoints->len - 1)
-                          + INTERVAL_SIZE;
-        if (sp_state.instr_count > last_end)
-            sp_state.stop = true;
+        if (!sp_state.stop) {
+            /*
+             * More simpoints remain. Disable CF_LOG_INSTR so TBs
+             * recompile without logging overhead. The per-TB counter
+             * in cpu_tb_exec takes over from here.
+             */
+            sp_state.mode = SIMPOINT_MODE_COUNTING;
+
+#ifdef TARGET_CHERI
+            /*
+             * CHERI: keep CF_LOG_INSTR on for cap store tracking.
+             * do_instr_commit will short-circuit to only track cap
+             * stores when mode == COUNTING.
+             */
+            if (trace_format != &trace_formats[4])
+                cpu_loglevel_switch(env, QEMU_LOG_INSTR_LOGLEVEL_NONE);
+#else
+            cpu_loglevel_switch(env, QEMU_LOG_INSTR_LOGLEVEL_NONE);
+#endif
+
+            fprintf(stderr,
+                    "Simpoint %d ended, counting mode at icount=%" PRIu64 "\n",
+                    finished_idx, sp_state.instr_count);
+        } else {
+            /*
+             * All simpoints done. Shut down.
+             */
+            sp_state.mode = SIMPOINT_MODE_INACTIVE;
+            cpu_loglevel_switch(env, QEMU_LOG_INSTR_LOGLEVEL_NONE);
+            fprintf(stderr,
+                    "All simpoints complete at icount=%" PRIu64 ", shutting down\n",
+                    sp_state.instr_count);
+            qemu_system_shutdown_request(SHUTDOWN_CAUSE_GUEST_SHUTDOWN);
+        }
     }
 
     return false;
@@ -1522,23 +1352,22 @@ static bool handle_pc_simpoints(CPUArchState *env,
         if (!count) {
             count = g_malloc0(sizeof(uint64_t));
             g_hash_table_insert(pc_exec_count_map,
-                               GSIZE_TO_POINTER(iinfo->pc), count);
+                                GSIZE_TO_POINTER(iinfo->pc), count);
         }
 
-        if (!sp_state.tracing) {
+        if (sp_state.mode != SIMPOINT_MODE_TRACING) {
             for (int i = 0; i < simpoint_pcs->len; i++) {
                 simpoint_pc_entry_t *entry = &g_array_index(simpoint_pcs,
                                                            simpoint_pc_entry_t, i);
                 if (iinfo->pc == entry->pc && *count == entry->execution_count) {
                     simpoint_open_trace(env, i, false);
-                    sp_state.tracing          = true;
+                    sp_state.mode             = SIMPOINT_MODE_TRACING;
                     sp_state.current_idx      = i;
                     cpulog->simpoint_insn_count = 0;
                     break;
                 }
             }
         }
-
         (*count)++;
     }
 
@@ -1547,14 +1376,14 @@ static bool handle_pc_simpoints(CPUArchState *env,
         track_cap_store(env, iinfo, /*allow_flush=*/false);
 #endif
 
-    if (sp_state.tracing) {
+    if (sp_state.mode == SIMPOINT_MODE_TRACING) {
         if (cpulog->simpoint_insn_count >= INTERVAL_SIZE) {
             simpoint_end(env, simpoint_pcs->len - 1);
             cpulog->simpoint_insn_count = 0;
             return false;
         }
         cpulog->simpoint_insn_count++;
-        return true;  /* emit this instruction */
+        return true;
     }
 
     return false;
@@ -1605,14 +1434,18 @@ static void do_instr_commit(CPUArchState *env)
     if (sp_state.stop)
         return;
 
-    /* Wait for start PC if configured */
-    if (START_PC != 0 && !sp_state.started) {
-        if (iinfo->pc == START_PC) {
-            sp_state.started = true;
-            fprintf(stderr, "Started tracing at start_pc: 0x%lx\n", START_PC);
-        } else {
-            return;
-        }
+    /*
+     * CHERI cap-store-only fast path: when CF_LOG_INSTR is on for
+     * cap tracking but we're not in a simpoint, only track stores
+     * and bail. The per-TB counter in cpu_tb_exec handles icount.
+     */
+    if (sp_state.mode == SIMPOINT_MODE_COUNTING ||
+        sp_state.mode == SIMPOINT_MODE_WAIT_START_PC) {
+#ifdef TARGET_CHERI
+        if (trace_format == &trace_formats[4])
+            track_cap_store(env, iinfo, /*allow_flush=*/true);
+#endif
+        return;
     }
 
     /* SimPoint dispatch */
@@ -1633,6 +1466,7 @@ static void do_instr_commit(CPUArchState *env)
     emit_with_dfilter(env, iinfo);
 }
 
+
 /*
  * Perform the actual work to change per-CPU log level.
  * This runs in the CPU exclusive context.
@@ -1642,7 +1476,7 @@ static void do_instr_commit(CPUArchState *env)
  * This is because on the path from the exclusive context to the translation
  * loop we may get an interrupt/exception causing a switch in CPU mode, causing
  * to stop logging. This would result in a pointless start/stop sequence with
- * no instructions executed in beteween.
+ * no instructions executed in between.
  */
 static void do_cpu_loglevel_switch(CPUState *cpu, run_on_cpu_data data)
 {
@@ -2162,6 +1996,107 @@ void qemu_log_instr_extra(CPUArchState *env, const char *msg, ...)
     va_end(va);
 }
 
+
+/*
+ * Per-TB simpoint counting. 
+ * Cost: ~1 function call + a few comparisons per TB.
+ * For a TB averaging 10 instructions, this is ~10x cheaper than
+ * per-instruction CF_LOG_INSTR overhead.
+ */
+void qemu_log_simpoint_count_tb(CPUArchState *env, target_ulong tb_pc, 
+                                uint64_t icount)
+{
+    CPUState *cpu = env_cpu(env);
+
+    switch (sp_state.mode) {
+
+    case SIMPOINT_MODE_WAIT_START_PC: {
+        /*
+         * Check if this TB starts at START_PC. For function entry points
+         * (which START_PC typically is), the PC will be a TB entry point.
+         */
+        if (tb_pc == START_PC) {
+            fprintf(stderr, "START_PC 0x%" PRIx64 " seen, entering counting mode\n",
+                    (uint64_t)START_PC);
+            sp_state.mode = SIMPOINT_MODE_COUNTING;
+            /* Fall through to count this TB's instructions */
+            sp_state.instr_count += icount;
+        }
+        break;
+    }
+
+    case SIMPOINT_MODE_COUNTING: {
+        sp_state.instr_count += icount;
+
+        /*
+         * Check if we've entered a simpoint region.
+         * find_active_interval is cheap — it's a linear scan over
+         * typically 10-30 simpoints.
+         */
+        interval_match_t m = find_active_interval(sp_state.instr_count);
+
+        if (m.should_trace) {
+            /*
+             * We've crossed into a simpoint region. Transition to
+             * TRACING mode: enable CF_LOG_INSTR and flush TBs.
+             */
+            fprintf(stderr,
+                "Simpoint %d boundary reached at icount=%" PRIu64 ", "
+                "enabling CF_LOG_INSTR\n",
+                m.idx, sp_state.instr_count);   
+
+            sp_state.mode = SIMPOINT_MODE_TRACING;
+
+            /* Open trace file */
+            simpoint_open_trace(env, m.idx, m.is_warmup);
+            sp_state.in_warmup   = m.is_warmup;
+            sp_state.current_idx = m.idx;
+
+            /*
+             * Enable full logging. This calls async_safe_run_on_cpu
+             * which schedules tb_flush in exclusive context.
+             * The current TB will finish, then the flush happens,
+             * and new TBs are compiled with CF_LOG_INSTR.
+             *
+             * We lose at most ~1 TB worth of instructions at the
+             * transition. With warmup of thousands of instructions
+             * before the actual simpoint, this is negligible.
+             */
+            global_loglevel_enable();
+            cpu_loglevel_switch(env, QEMU_LOG_INSTR_LOGLEVEL_USER);
+        }
+
+        /* Check if we're past all simpoints */
+        if (!m.should_trace && simpoints) {
+            uint64_t last_end = g_array_index(simpoints, uint64_t,
+                                              simpoints->len - 1)
+                              + INTERVAL_SIZE;
+            if (sp_state.instr_count > last_end) {
+                fprintf(stderr,
+                    "All simpoints complete at icount=%" PRIu64 ", shutting down\n",
+                    sp_state.instr_count);
+                sp_state.stop = true;
+                sp_state.mode = SIMPOINT_MODE_INACTIVE;
+
+                /* Trigger QEMU shutdown */
+                qemu_system_shutdown_request(SHUTDOWN_CAUSE_GUEST_SHUTDOWN);
+            }
+        }
+        break;
+    }
+
+    case SIMPOINT_MODE_TRACING:
+    case SIMPOINT_MODE_INACTIVE:
+        break;
+    }
+}
+
+bool qemu_simpoint_counting_active(void)
+{
+    return sp_state.mode == SIMPOINT_MODE_COUNTING ||
+           sp_state.mode == SIMPOINT_MODE_WAIT_START_PC;
+}
+
 /*
  *  A printf that takes an array of argments unioned of all possible argument
  * types. Because we cant edit a VA_LIST, and we don't want the exponential blow
@@ -2629,6 +2564,68 @@ void helper_qemu_log_instr_user_start(CPUArchState *env, target_ulong pc)
 void helper_qemu_log_instr_stop(CPUArchState *env, target_ulong pc)
 {
 
+    cpu_loglevel_switch(env, QEMU_LOG_INSTR_LOGLEVEL_NONE);
+}
+
+
+/* Start logging user-only instructions on the current CPU if SimPoint region is hit*/
+void helper_qemu_log_instr_simpoint_start(CPUArchState *env, target_ulong pc)
+{
+    if (sp_state.mode != SIMPOINT_MODE_INACTIVE) {
+        fprintf(stderr, "simpoint_start: already active (mode=%d), ignoring\n",
+                sp_state.mode);
+        return;
+    }
+
+    if (!simpoints && !simpoint_pcs) {
+        fprintf(stderr, "simpoint_start: no simpoints configured, "
+                "falling back to normal user-mode tracing\n");
+        helper_qemu_log_instr_user_start(env, pc);
+        return;
+    }
+
+    fprintf(stderr, "Simpoint-aware tracing started (START_PC=0x%" PRIx64 ")\n", START_PC);
+
+    sp_state.instr_count = 0;
+    sp_state.current_idx = -1;
+    sp_state.in_warmup   = false;
+    sp_state.stop        = false;
+    sp_state.file_open   = false;
+
+    if (START_PC != 0) {
+        sp_state.mode = SIMPOINT_MODE_WAIT_START_PC;
+    } else {
+        sp_state.mode = SIMPOINT_MODE_COUNTING;
+    } 
+
+    tb_flush(env_cpu(env));
+
+#ifdef TARGET_CHERI
+    /*
+     * For CHERI format, we need CF_LOG_INSTR on to track capability
+     * stores between simpoints. This is the overhead tradeoff for CHERI.
+     * For non-CHERI (champsim format), counting mode is truly lightweight.
+     */
+    if (trace_format == &trace_formats[4]) {
+        global_loglevel_enable();
+        cpu_loglevel_switch(env, QEMU_LOG_INSTR_LOGLEVEL_USER);
+    }
+#endif
+}
+
+/* Stop logging on the current CPU if we're outside the simpoint region*/
+void helper_qemu_log_instr_simpoint_stop(CPUArchState *env, target_ulong pc)
+{
+    fprintf(stderr, "Simpoint-aware tracing stopped (counted %" PRIu64 " instructions)\n",
+            sp_state.instr_count);
+
+    /* If we were in tracing mode, clean up */
+    if (sp_state.mode == SIMPOINT_MODE_TRACING)
+        simpoint_close_trace();
+
+    sp_state.mode = SIMPOINT_MODE_INACTIVE;
+
+    /* Disable CF_LOG_INSTR if it was on */
     cpu_loglevel_switch(env, QEMU_LOG_INSTR_LOGLEVEL_NONE);
 }
 

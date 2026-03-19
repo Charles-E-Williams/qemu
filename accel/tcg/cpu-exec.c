@@ -205,6 +205,9 @@ cpu_tb_exec(CPUState *cpu, TranslationBlock *itb, int *tb_exit)
 
     trace_exec_tb_exit(last_tb, *tb_exit);
 
+    if (unlikely(qemu_simpoint_counting_active())) {
+        qemu_log_simpoint_count_tb(env, itb->pc, itb->icount);
+    }
     if (*tb_exit > TB_EXIT_IDX1) {
         /* We didn't start executing this TB (eg because the instruction
          * counter hit zero); we must restore the guest PC to the address
@@ -683,7 +686,10 @@ static inline void cpu_loop_exec_tb(CPUState *cpu, TranslationBlock *tb,
     trace_exec_tb(tb, tb->pc);
     tb = cpu_tb_exec(cpu, tb, tb_exit);
     if (*tb_exit != TB_EXIT_REQUESTED) {
-        *last_tb = tb;
+        if (unlikely(qemu_simpoint_counting_active()))
+            *last_tb = NULL;
+        else
+            *last_tb = tb;
         return;
     }
 

@@ -377,6 +377,10 @@ DEF_HELPER_FLAGS_3(qemu_log_instr_branch, TCG_CALL_NO_WG, void, env, i32, i32)
 DEF_HELPER_FLAGS_3(qemu_log_reg_src, TCG_CALL_NO_WG, void, env, i32, i32)
 DEF_HELPER_FLAGS_3(qemu_log_reg_dst, TCG_CALL_NO_WG, void, env, i32, i32)
 
+// helpers for stopping and starting simpoints tracing
+DEF_HELPER_FLAGS_2(qemu_log_instr_simpoint_start, TCG_CALL_NO_WG, void, env, tl)
+DEF_HELPER_FLAGS_2(qemu_log_instr_simpoint_stop, TCG_CALL_NO_WG, void, env, tl)
+
 #ifdef TARGET_CHERI
 DEF_HELPER_FLAGS_3(qemu_log_instr_cap, TCG_CALL_NO_WG, void, env, cptr, cptr)
 #endif

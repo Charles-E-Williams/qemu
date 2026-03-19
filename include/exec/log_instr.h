@@ -209,6 +209,18 @@ void qemu_log_instr_start(CPUArchState *env, target_ulong pc);
  */
 void qemu_log_instr_stop(CPUArchState *env, target_ulong pc);
 
+
+/*
+ * Start instruction tracing with SimPoints. Note that the instruction currently being
+ * executed will be replaced by a trace start event.
+ */
+void qemu_log_instr_simpoint_start(CPUArchState *env, target_ulong pc);
+
+/*
+ * Stop instruction tracing outside of SimPoint region
+ */
+void qemu_log_instr_simpoint_start(CPUArchState *env, target_ulong pc);
+
 /*
  * Log a switch inc CPU modes.
  * This will also trigger pause and resume of user-only logging activity,
@@ -334,10 +346,18 @@ void qemu_log_instr_evt(CPUArchState *env, uint16_t fn, target_ulong arg0,
  */
 void qemu_log_instr_extra(CPUArchState *env, const char *msg, ...);
 
+void qemu_log_simpoint_count_tb(CPUArchState *env, target_ulong tb_pc,  uint64_t icount);
+
+bool qemu_simpoint_counting_active(void);
+
+void qemu_log_simpoint_count_tb(CPUArchState *env, target_ulong tb_pc, uint64_t icount);
+
 #else /* ! CONFIG_TCG_LOG_INSTR */
 #define	qemu_log_instr_enabled(cpu) false
 #define	qemu_log_instr_start(env, mode, pc)
 #define	qemu_log_instr_stop(env, mode, pc)
+#define	qemu_log_instr_simpoint_start(env, mode, pc)
+#define	qemu_log_instr_simpoint_stop(env, mode, pc)
 #define	qemu_log_instr_mode_switch(...)
 #define qemu_log_instr_flush(env)
 #define	qemu_log_instr_reg(...)
@@ -354,4 +374,6 @@ void qemu_log_instr_extra(CPUArchState *env, const char *msg, ...);
 #define qemu_log_gen_printf(...)
 #define qemu_log_gen_printf_flush(base, flush_early, force_flush)
 #define qemu_log_printf_create_globals(...)
+static inline bool qemu_simpoint_counting_active(void) { return false; }
+static inline void qemu_log_simpoint_count_tb(CPUArchState *env, target_ulong tb_pc, uint64_t icount) {}
 #endif /* ! CONFIG_TCG_LOG_INSTR */

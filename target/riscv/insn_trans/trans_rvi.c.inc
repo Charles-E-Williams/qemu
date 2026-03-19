@@ -494,6 +494,14 @@ static bool trans_slti(DisasContext *ctx, arg_slti *a)
             gen_helper_qemu_log_instr_stop(cpu_env, tpc);
             ctx->base.is_jmp = DISAS_NORETURN;
             break;
+        case 0x3b:
+            gen_helper_qemu_log_instr_simpoint_start(cpu_env, tpc);
+            ctx->base.is_jmp = DISAS_NORETURN;
+            break;
+        case 0x3e:
+            gen_helper_qemu_log_instr_simpoint_stop(cpu_env, tpc);
+            ctx->base.is_jmp = DISAS_NORETURN;
+            break;
         }
         tcg_temp_free(tpc);
 
