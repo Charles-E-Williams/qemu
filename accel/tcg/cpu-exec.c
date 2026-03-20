@@ -188,6 +188,17 @@ cpu_tb_exec(CPUState *cpu, TranslationBlock *itb, int *tb_exit)
     }
 #endif /* DEBUG_DISAS */
 
+    if (unlikely(qemu_simpoint_counting_active())) {
+        if (qemu_simpoint_would_cross_boundary(itb->icount)) {
+            qemu_simpoint_begin_approaching(env);
+            cpu_loop_exit(cpu);
+        }
+    }
+
+    if (qemu_simpoint_waiting_for_start_pc(itb->pc, itb->size)) {
+        qemu_simpoint_enter_counting(env);
+        cpu_loop_exit(cpu);
+    }
     qemu_thread_jit_execute();
     ret = tcg_qemu_tb_exec(env, tb_ptr);
     cpu->can_do_io = 1;

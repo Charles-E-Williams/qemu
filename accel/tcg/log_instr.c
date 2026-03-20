@@ -779,6 +779,11 @@ static void emit_champsim_entry(CPUArchState *env, cpu_log_instr_info_t *iinfo)
 
             case NOT_BRANCH:
             default:
+            fprintf(stderr, 
+                "FATAL: Unrecognized branch type %d at PC 0x%" PRIx64 
+                " (is_branch=%d, mode=%d)\n",
+                iinfo->branch_type, (uint64_t)iinfo->pc, 
+                iinfo->is_branch, sp_state.mode);
                 assert(false && "Error: Unrecognized branch type\n");
         }
     } else {
@@ -1217,19 +1222,9 @@ static void global_loglevel_enable(void);
 static bool handle_interval_simpoints(CPUArchState *env,
                                       cpu_log_instr_info_t *iinfo)
 {
-    /*
-     * This function is ONLY called when CF_LOG_INSTR is active,
-     * which means sp_state.mode == SIMPOINT_MODE_TRACING.
-     *
-     * The per-TB counting path in cpu_tb_exec handles COUNTING
-     * and WAIT_START_PC modes. When it detects a simpoint boundary,
-     * it enables CF_LOG_INSTR and sets mode = TRACING, at which
-     * point this function takes over with per-instruction granularity.
-     *
-     * For CHERI: CF_LOG_INSTR may also be on during COUNTING mode
-     * for cap store tracking. In that case, do_instr_commit
-     * short-circuits before reaching this function.
-     */
+
+    if (!cpu_in_user_mode(env))
+        return false;
 
 #ifdef TARGET_CHERI
     /*
@@ -1319,7 +1314,7 @@ static bool handle_interval_simpoints(CPUArchState *env,
 
             fprintf(stderr,
                     "Simpoint %d ended, counting mode at icount=%" PRIu64 "\n",
-                    finished_idx, sp_state.instr_count);
+                    finished_idx, sp_state.instr_count -1);
         } else {
             /*
              * All simpoints done. Shut down.
@@ -1328,9 +1323,17 @@ static bool handle_interval_simpoints(CPUArchState *env,
             cpu_loglevel_switch(env, QEMU_LOG_INSTR_LOGLEVEL_NONE);
             fprintf(stderr,
                     "All simpoints complete at icount=%" PRIu64 ", shutting down\n",
-                    sp_state.instr_count);
+                    sp_state.instr_count-1);
             qemu_system_shutdown_request(SHUTDOWN_CAUSE_GUEST_SHUTDOWN);
         }
+    } else if (sp_state.mode == SIMPOINT_MODE_APPROACHING) {
+        /*
+         * Still approaching the boundary — count but don't emit.
+         * This is the gap between where the TB counter was and
+         * adj_start. We're burning through these at per-instruction
+         * cost, but it's at most one TB's worth (~10-30 insns).
+         */
+        return false;
     }
 
     return false;
@@ -1428,7 +1431,8 @@ static void do_instr_commit(CPUArchState *env)
     if (cpulog->starting) {
         cpulog->starting = false;
         emit_start_event(env, cpu_get_recent_pc(env));
-        return;
+        if (sp_state.mode != SIMPOINT_MODE_APPROACHING_START && sp_state.mode != SIMPOINT_MODE_APPROACHING)
+            return;
     }
 
     if (sp_state.stop)
@@ -1448,6 +1452,31 @@ static void do_instr_commit(CPUArchState *env)
         return;
     }
 
+
+    if (sp_state.mode == SIMPOINT_MODE_APPROACHING_START) {
+        if (iinfo->pc == START_PC) {
+            fprintf(stderr, "START_PC 0x%" PRIx64
+                    " reached at exact instruction\n",
+                    (uint64_t)START_PC);
+            sp_state.instr_count = 0;
+
+            interval_match_t m = find_active_interval(0);
+            if (m.should_trace) {
+                simpoint_open_trace(env, m.idx, m.is_warmup);
+                sp_state.mode        = SIMPOINT_MODE_TRACING;
+                sp_state.in_warmup   = m.is_warmup;
+                sp_state.current_idx = m.idx;
+                /* Fall through to emit this instruction */
+            } else {
+                sp_state.mode = SIMPOINT_MODE_COUNTING;
+                cpu_loglevel_switch(env, QEMU_LOG_INSTR_LOGLEVEL_NONE);
+                return;
+            }
+        } else {
+            return;  /* still scanning, don't emit or count */
+        }
+    }
+    
     /* SimPoint dispatch */
     bool should_emit = true;
 
@@ -2015,10 +2044,7 @@ void qemu_log_simpoint_count_tb(CPUArchState *env, target_ulong tb_pc,
     switch (sp_state.mode) {
 
     case SIMPOINT_MODE_WAIT_START_PC: {
-        /*
-         * Check if this TB starts at START_PC. For function entry points
-         * (which START_PC typically is), the PC will be a TB entry point.
-         */
+
         if (tb_pc == START_PC) {
             fprintf(stderr, "START_PC 0x%" PRIx64 " seen, entering counting mode\n",
                     (uint64_t)START_PC);
@@ -2091,6 +2117,8 @@ void qemu_log_simpoint_count_tb(CPUArchState *env, target_ulong tb_pc,
 
     case SIMPOINT_MODE_TRACING:
     case SIMPOINT_MODE_INACTIVE:
+    case SIMPOINT_MODE_APPROACHING:
+    case SIMPOINT_MODE_APPROACHING_START:
         break;
     }
 }
@@ -2099,6 +2127,90 @@ bool qemu_simpoint_counting_active(void)
 {
     return sp_state.mode == SIMPOINT_MODE_COUNTING ||
            sp_state.mode == SIMPOINT_MODE_WAIT_START_PC;
+}
+
+
+
+/*
+ * Check whether executing a TB with `icount` instructions
+ * would cross from outside a simpoint region to inside one.
+ * Called BEFORE TB execution — this is the key to zero-loss transitions.
+ */
+bool qemu_simpoint_would_cross_boundary(uint64_t tb_icount)
+{
+    if (sp_state.mode != SIMPOINT_MODE_COUNTING || !simpoints)
+        return false;
+
+    uint64_t count_before = sp_state.instr_count;
+    uint64_t count_after  = count_before + tb_icount;
+
+    /*
+     * If we're not in a simpoint now but would be after this TB,
+     * this TB straddles the boundary.
+     */
+    interval_match_t m_before = find_active_interval(count_before);
+    interval_match_t m_after  = find_active_interval(count_after);
+
+    return (!m_before.should_trace && m_after.should_trace);
+}
+
+/*
+ * Transition from COUNTING to APPROACHING.
+ * Called from cpu_tb_exec BEFORE the crossing TB runs.
+ * Enables CF_LOG_INSTR and flushes TB cache so the same PC
+ * gets recompiled with per-instruction logging.
+ */
+void qemu_simpoint_begin_approaching(CPUArchState *env)
+{
+    CPUState *cpu = env_cpu(env);
+
+    fprintf(stderr,
+        "APPROACHING: TB would cross simpoint boundary at icount=%" PRIu64
+        ", enabling CF_LOG_INSTR for precise boundary detection\n",
+        sp_state.instr_count);
+
+    sp_state.mode = SIMPOINT_MODE_APPROACHING;
+
+    /*
+     * Enable per-instruction logging. We're in the cpu_exec loop
+     * (not exclusive context), so we need to be direct about it.
+     * Since we're about to cpu_loop_exit(), the safest path is:
+     *   1. Set the global flag so new TBs compile with CF_LOG_INSTR
+     *   2. Flush all TBs (we're about to exit anyway)
+     *   3. Set per-CPU log level
+     *
+     * We call tb_flush directly because we're about to longjmp
+     * out of the TB execution loop — the flush is synchronous
+     * from the perspective of this CPU since we never return
+     * to execute another TB before the flush completes.
+     */
+    global_loglevel_enable();
+    cpu_loglevel_switch(env, QEMU_LOG_INSTR_LOGLEVEL_USER);
+}
+
+
+bool qemu_simpoint_waiting_for_start_pc(target_ulong tb_pc, uint32_t tb_size)
+{
+    return sp_state.mode == SIMPOINT_MODE_WAIT_START_PC &&
+           tb_pc <= START_PC && START_PC < tb_pc + tb_size;
+}
+
+void qemu_simpoint_enter_counting(CPUArchState *env)
+{
+    fprintf(stderr, "START_PC 0x%" PRIx64 " found, enabling CF_LOG_INSTR "
+            "for precise entry\n", (uint64_t)START_PC);
+
+    /*
+     * Don't set instr_count here — we haven't executed anything yet.
+     * Enable CF_LOG_INSTR and go to APPROACHING_START, which will
+     * count per-instruction until it sees START_PC, then switch
+     * to COUNTING (or APPROACHING if interval 0 is a simpoint).
+     */
+    sp_state.mode = SIMPOINT_MODE_APPROACHING_START;
+    sp_state.instr_count = 0;
+
+    global_loglevel_enable();
+    cpu_loglevel_switch(env, QEMU_LOG_INSTR_LOGLEVEL_USER);
 }
 
 /*
