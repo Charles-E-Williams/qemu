@@ -167,9 +167,8 @@ typedef struct {
 typedef enum {
     SIMPOINT_MODE_INACTIVE = 0,    /* No simpoint tracing active */
     SIMPOINT_MODE_WAIT_START_PC,   /* Waiting for START_PC, per-TB PC check */
-    SIMPOINT_MODE_APPROACHING_START,
+    SIMPOINT_MODE_STEPPING_TO_START,
     SIMPOINT_MODE_COUNTING,        /* Counting instructions per-TB, no CF_LOG_INSTR */
-    SIMPOINT_MODE_APPROACHING,
     SIMPOINT_MODE_TRACING,         /* Inside simpoint region, CF_LOG_INSTR on */
 } simpoint_mode_t;
 

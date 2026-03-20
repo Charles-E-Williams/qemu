@@ -352,13 +352,11 @@ bool qemu_simpoint_counting_active(void);
 
 void qemu_log_simpoint_count_tb(CPUArchState *env, target_ulong tb_pc, uint64_t icount);
 
-bool qemu_simpoint_would_cross_boundary(uint64_t tb_icount);
-
-void qemu_simpoint_begin_approaching(CPUArchState *env);
-
 bool qemu_simpoint_waiting_for_start_pc(target_ulong tb_pc, uint32_t tb_size);
 
-void qemu_simpoint_enter_counting(CPUArchState *env);
+void qemu_simpoint_enter_stepping(CPUArchState *env);
+
+bool qemu_simpoint_needs_stepping(uint64_t tb_icount);
 
 #else /* ! CONFIG_TCG_LOG_INSTR */
 #define	qemu_log_instr_enabled(cpu) false
@@ -384,8 +382,7 @@ void qemu_simpoint_enter_counting(CPUArchState *env);
 #define qemu_log_printf_create_globals(...)
 static inline bool qemu_simpoint_counting_active(void) { return false; }
 static inline void qemu_log_simpoint_count_tb(CPUArchState *env, target_ulong tb_pc, uint64_t icount) {}
-static inline bool qemu_simpoint_would_cross_boundary(uint64_t tb_icount)  { return false; }
-static inline void qemu_simpoint_begin_approaching(CPUArchState *env) {}
 static inline bool qemu_simpoint_waiting_for_start_pc(target_ulong tb_pc, uint32_t tb_size) { return false; }
-static inline void qemu_simpoint_enter_counting(CPUArchState *env) {}
+static inline bool qemu_simpoint_needs_stepping(uint64_t tb_icount) { return false; }
+static inline void qemu_simpoint_enter_stepping(CPUArchState *env) {}
 #endif /* ! CONFIG_TCG_LOG_INSTR */
