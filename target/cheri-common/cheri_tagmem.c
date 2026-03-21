@@ -418,6 +418,10 @@ void cheri_tag_invalidate(CPUArchState *env, target_ulong vaddr, int32_t size,
         target_ulong inval_size = MIN(CHERI_CAP_SIZE, last_addr + 1 - addr);
         cheri_tag_invalidate_one(env, addr, inval_size, pc, mmu_idx);
     }
+
+#if defined(CONFIG_TCG_LOG_INSTR)
+    qemu_simpoint_invalidate_cap(vaddr, size);
+#endif
 }
 
 static void *cheri_tag_invalidate_one(CPUArchState *env, target_ulong vaddr,

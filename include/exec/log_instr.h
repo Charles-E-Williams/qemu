@@ -346,17 +346,24 @@ void qemu_log_instr_evt(CPUArchState *env, uint16_t fn, target_ulong arg0,
  */
 void qemu_log_instr_extra(CPUArchState *env, const char *msg, ...);
 
-void qemu_log_simpoint_count_tb(CPUArchState *env, target_ulong tb_pc,  uint64_t icount);
-
 bool qemu_simpoint_counting_active(void);
 
-void qemu_log_simpoint_count_tb(CPUArchState *env, target_ulong tb_pc, uint64_t icount);
+void qemu_simpoint_count_tb(CPUArchState *env, target_ulong tb_pc, uint64_t icount);
 
 bool qemu_simpoint_waiting_for_start_pc(target_ulong tb_pc, uint32_t tb_size);
 
 void qemu_simpoint_enter_stepping(CPUArchState *env);
 
 bool qemu_simpoint_needs_stepping(uint64_t tb_icount);
+
+
+#ifdef TARGET_CHERI
+void qemu_simpoint_track_cap_store(CPUArchState *env, target_ulong vaddr,
+                                   bool tag, target_ulong pesbt,
+                                   target_ulong cursor);
+
+void qemu_simpoint_invalidate_cap(target_ulong vaddr, int32_t size);
+#endif
 
 #else /* ! CONFIG_TCG_LOG_INSTR */
 #define	qemu_log_instr_enabled(cpu) false
@@ -381,8 +388,10 @@ bool qemu_simpoint_needs_stepping(uint64_t tb_icount);
 #define qemu_log_gen_printf_flush(base, flush_early, force_flush)
 #define qemu_log_printf_create_globals(...)
 static inline bool qemu_simpoint_counting_active(void) { return false; }
-static inline void qemu_log_simpoint_count_tb(CPUArchState *env, target_ulong tb_pc, uint64_t icount) {}
+static inline void qemu_simpoint_count_tb(CPUArchState *env, target_ulong tb_pc, uint64_t icount) {}
 static inline bool qemu_simpoint_waiting_for_start_pc(target_ulong tb_pc, uint32_t tb_size) { return false; }
 static inline bool qemu_simpoint_needs_stepping(uint64_t tb_icount) { return false; }
 static inline void qemu_simpoint_enter_stepping(CPUArchState *env) {}
+static inline void qemu_simpoint_track_cap_store(CPUArchState *env, target_ulong vaddr, bool tag, target_ulong pesbt, target_ulong cursor) {}
+static inline void qemu_simpoint_invalidate_cap(target_ulong vaddr, int32_t size) {}
 #endif /* ! CONFIG_TCG_LOG_INSTR */

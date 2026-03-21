@@ -216,7 +216,7 @@ cpu_tb_exec(CPUState *cpu, TranslationBlock *itb, int *tb_exit)
     trace_exec_tb_exit(last_tb, *tb_exit);
 
     if (unlikely(qemu_simpoint_counting_active())) {
-        qemu_log_simpoint_count_tb(env, itb->pc, itb->icount);
+        qemu_simpoint_count_tb(env, itb->pc, itb->icount);
     }
     if (*tb_exit > TB_EXIT_IDX1) {
         /* We didn't start executing this TB (eg because the instruction
@@ -697,6 +697,7 @@ static inline void cpu_loop_exec_tb(CPUState *cpu, TranslationBlock *tb,
     tb = cpu_tb_exec(cpu, tb, tb_exit);
     if (*tb_exit != TB_EXIT_REQUESTED) {
 
+        /* Prevents TB from jumping to a new block */
         if (unlikely(qemu_simpoint_counting_active()))
             *last_tb = NULL;
         else
@@ -743,6 +744,7 @@ static inline void cpu_loop_exec_tb(CPUState *cpu, TranslationBlock *tb,
 int cpu_exec(CPUState *cpu)
 {
     CPUClass *cc = CPU_GET_CLASS(cpu);
+    (void)cc;
     int ret;
     SyncClocks sc = { 0 };
 

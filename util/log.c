@@ -36,10 +36,8 @@ static int log_append = 0;
 GArray *debug_regions;
 GArray *simpoints;
 GArray *adjusted_simpoints;
-GArray *warmup_duration;
-GArray *simpoint_pcs;       
+GArray *simpoint_pcs;   
 uint64_t INTERVAL_SIZE;
-uint64_t WARMUP_INTERVAL;
 uint64_t START_PC = 0;
 
 /* Return the number of characters emitted.  */
@@ -223,191 +221,179 @@ bool qemu_log_in_addr_range(uint64_t addr)
 }
 
 
-void qemu_set_simpoints(const char* simpoints_arg, Error **errp)
+static bool parse_pc_simpoints(gchar **lines, uint64_t start_pc, uint64_t warmup, Error **errp)
 {
-    gchar **args = g_strsplit(simpoints_arg, ",", -1);
+    simpoint_pcs = g_array_new(FALSE, TRUE, sizeof(simpoint_pc_entry_t));
+    
+    for (int i = 0; lines[i] != NULL; i++) {
+        gchar *line = g_strstrip(lines[i]);
+        if (line[0] == '\0' || line[0] == '#') 
+            continue;
+        
+        
+        simpoint_pc_entry_t entry;
+        
+        if (sscanf(line, "0x%" SCNx64 " %" SCNu64, &entry.pc, &entry.execution_count) != 2 &&
+            sscanf(line, "%" SCNx64 " %" SCNu64, &entry.pc, &entry.execution_count) != 2) {
+            error_setg(errp, "Invalid PC format line: %s", line);
+            return false;
+        }
+        
+        g_array_append_val(simpoint_pcs, entry);
+    }
+    
+    fprintf(stderr, "Loaded %u PC-based SimPoints\n", simpoint_pcs->len);
+    
+    if (warmup > 0) {
+        fprintf(stderr, "Warning: Warmup parameter ignored for PC-based simpoints\n");
+    }
+    if (start_pc != 0) {
+        fprintf(stderr, "Tracing will begin at start_pc: 0x%" PRIx64 "\n", start_pc);
+    }
+    
+    return true;
+}
+
+static bool parse_interval_simpoints(gchar **lines, uint64_t start_pc, uint64_t warmup, Error **errp)
+{
+    g_autoptr(GArray) temp = g_array_new(FALSE, TRUE, sizeof(uint64_t));
+    simpoints = g_array_new(FALSE, TRUE, sizeof(uint64_t));
+    adjusted_simpoints = g_array_new(FALSE, TRUE, sizeof(uint64_t));
+
+    for (int i = 0; lines[i] != NULL; i++) {
+        uint64_t interval_num;
+        gchar *line = g_strstrip(lines[i]);
+        
+        if (line[0] == '\0' || line[0] == '#') 
+            continue;
+        
+        
+        if (sscanf(line, "%" SCNu64, &interval_num) != 1) {
+            error_setg(errp, "Invalid line format: %s", line);
+            return false;
+        }
+        g_array_append_val(temp, interval_num);
+    }
+
+    for (int i = 0; i < temp->len; i++) {
+        uint64_t interval_num = g_array_index(temp, uint64_t, i);
+        uint64_t start = interval_num * INTERVAL_SIZE;
+        uint64_t adjusted_start = start;
+
+        if (warmup > 0) {
+            if (i == 0) {
+                adjusted_start = (start > warmup) ? (start - warmup) : 0; // handles the edge-case where the simpoint begins at instruction 0
+            } else {
+                uint64_t prev_interval = g_array_index(temp, uint64_t, i - 1);
+                uint64_t prev_end = (prev_interval + 1) * INTERVAL_SIZE;
+                uint64_t gap = start - prev_end;
+
+                adjusted_start = (warmup > gap) ? prev_end : (start - warmup);
+            }
+        }
+
+        g_array_append_val(simpoints, start);
+        g_array_append_val(adjusted_simpoints, adjusted_start);
+    }
+
+    fprintf(stderr, "Loaded %u interval-based simpoints\n", simpoints->len);
+    
+    if (start_pc != 0) {
+        fprintf(stderr, "Tracing will begin at start_pc: 0x%" PRIx64 "\n", start_pc);
+    }
+
+    return true;
+}
+
+void qemu_set_simpoints(const char *simpoints_arg, Error **errp)
+{
+    g_auto(GStrv) args = g_strsplit(simpoints_arg, ",", -1);
     g_autoptr(GError) err = NULL;
-    char* filename = NULL;
+    
+    g_autofree char *filename = NULL;
+    g_autofree char *format = g_strdup("interval");
+    g_autofree char *file_contents = NULL;
+    g_auto(GStrv) lines = NULL;
+
     uint64_t interval = 1000000000; /* 1 Billion instructions by default */
-    gchar* file_contents = NULL;
-    gchar** lines = NULL;
     uint64_t warmup = 0;
-    const char* format = "interval";  /* Default to interval format */
     uint64_t start_pc = 0;
 
     /* Parse arguments */
     for (int i = 0; args[i]; i++) {
-        gchar** kv = g_strsplit(args[i], "=", 2);
-        if (kv[0] && kv[1]) {
-            if (strcmp(kv[0], "file") == 0) {
-                filename = g_strdup(kv[1]);
-            } else if (strcmp(kv[0], "interval") == 0) {
-                if (qemu_strtou64(kv[1], NULL, 10, &interval)) {
-                    error_setg(errp, "Invalid interval size input");
-                    g_strfreev(kv);
-                    goto out;
-                }
-            } else if (strcmp(kv[0], "warmup") == 0) {
-                if (qemu_strtou64(kv[1], NULL, 10, &warmup)) {
-                    error_setg(errp, "Invalid warmup instructions input");
-                    g_strfreev(kv);
-                    goto out;
-                }
-            } else if (strcmp(kv[0], "format") == 0) {
-                format = g_strdup(kv[1]);
-            } else if (strcmp(kv[0], "start_pc") == 0) {
-                if (qemu_strtou64(kv[1], NULL, 0, &start_pc)) {
-                    error_setg(errp, "Invalid start_pc input");
-                    g_strfreev(kv);
-                    goto out;
-                }
-            } else {
-                error_setg(errp, "Unknown option: %s", kv[0]);
-                g_strfreev(kv);
-                goto out;
-            }  
+        g_auto(GStrv) kv = g_strsplit(args[i], "=", 2);
+        if (!kv[0] || !kv[1]) {
+            continue; 
         }
-        g_strfreev(kv);
+
+        if (strcmp(kv[0], "file") == 0) {
+            g_free(filename);
+            filename = g_strdup(kv[1]);
+        } else if (strcmp(kv[0], "interval") == 0) {
+            if (qemu_strtou64(kv[1], NULL, 10, &interval)) {
+                error_setg(errp, "Invalid interval size input");
+                return;
+            }
+        } else if (strcmp(kv[0], "warmup") == 0) {
+            if (qemu_strtou64(kv[1], NULL, 10, &warmup)) {
+                error_setg(errp, "Invalid warmup instructions input");
+                return;
+            }
+        } else if (strcmp(kv[0], "format") == 0) {
+            g_free(format);
+            format = g_strdup(kv[1]); 
+        } else if (strcmp(kv[0], "start_pc") == 0) {
+            if (qemu_strtou64(kv[1], NULL, 0, &start_pc)) {
+                error_setg(errp, "Invalid start_pc input");
+                return;
+            }
+        } else {
+            error_setg(errp, "Unknown option: %s", kv[0]);
+            return;
+        }
     }
 
     if (!filename) {
         error_setg(errp, "Missing filename");
-        goto out;
+        return;
     }
 
     if (!g_file_get_contents(filename, &file_contents, NULL, &err)) {
         error_setg(errp, "Could not read file: %s", err->message);
-        goto out;
+        return;
     }
 
-    /* Clean up existing arrays */
     if (simpoints) {
         g_array_free(simpoints, TRUE);
         g_array_free(adjusted_simpoints, TRUE);
-        g_array_free(warmup_duration, TRUE);
         simpoints = NULL;
         adjusted_simpoints = NULL;
-        warmup_duration = NULL;
-    }
-    if (simpoint_pcs) {
+    } if (simpoint_pcs) {
         g_array_free(simpoint_pcs, TRUE);
         simpoint_pcs = NULL;
     }
 
     INTERVAL_SIZE = interval;
-    WARMUP_INTERVAL = warmup;
     START_PC = start_pc; 
 
     lines = g_strsplit(file_contents, "\n", -1);
     
+    /* Route to appropriate handler based on format */
     if (strcmp(format, "pc") == 0) {
-        /* PC-based format - NO warmup support */
-        simpoint_pcs = g_array_new(FALSE, TRUE, sizeof(simpoint_pc_entry_t));
-        
-        for (int i = 0; lines[i] != NULL; i++) {
-            gchar* line = g_strstrip(lines[i]);
-            if (line[0] == '\0' || line[0] == '#') continue;
-            
-            simpoint_pc_entry_t entry;
-            
-            /* Format: PC execution_count */
-            if (sscanf(line, "0x%" SCNx64 " %" SCNu64, 
-                      &entry.pc, &entry.execution_count) != 2) {
-                if (sscanf(line, "%" SCNx64 " %" SCNu64, 
-                          &entry.pc, &entry.execution_count) != 2) {
-                    error_setg(errp, "Invalid PC format line: %s", line);
-                    goto out;
-                }
-            }
-            
-            /* No warmup adjustment for PC-based simpoints */
-            g_array_append_val(simpoint_pcs, entry);
+        if (!parse_pc_simpoints(lines, start_pc, warmup, errp)) {
+            g_array_free(simpoint_pcs, TRUE);
+            simpoint_pcs = NULL;
         }
-        
-        fprintf(stderr, "Loaded %d PC-based simpoints\n", 
-                simpoint_pcs->len);
-        
-        if (warmup > 0) {
-            fprintf(stderr, "Warning: warmup parameter ignored for PC-based simpoints\n");
-        }
-        
-        if (start_pc != 0) {
-            fprintf(stderr, "Tracing will begin at start_pc: 0x%lx\n", start_pc);
-        }
-        
     } else {
-        /* Traditional interval-based format - your existing logic */
-        simpoints = g_array_new(FALSE, TRUE, sizeof(uint64_t));
-        adjusted_simpoints = g_array_new(FALSE, TRUE, sizeof(uint64_t));
-        warmup_duration = g_array_new(FALSE, TRUE, sizeof(uint64_t));
-
-        GArray *temp = g_array_new(FALSE, TRUE, sizeof(uint64_t));
-        
-        for (int i = 0; lines[i] != NULL; i++) {
-            uint64_t interval_num;
-            gchar* line = g_strstrip(lines[i]);
-            
-            if (line[0] == '\0' || line[0] == '#') continue;
-            
-            if (sscanf(line, "%" SCNu64, &interval_num) != 1) {
-                error_setg(errp, "Invalid line format: %s", line);
-                g_array_free(temp, TRUE);
-                goto out;
-            }
-            
-            g_array_append_val(temp, interval_num);
-        }
-
-        /* Calculate adjusted starts with warmup - your existing logic */
-        for (int i = 0; i < temp->len; i++) {
-            uint64_t interval_num = g_array_index(temp, uint64_t, i);
-            uint64_t start = interval_num * INTERVAL_SIZE;
-            uint64_t adjusted_start = start;
-            uint64_t warmup_instr = 0;
-
-            if (warmup) {
-                if (i == 0) {
-                    if (start > warmup) {
-                        adjusted_start = start - warmup;
-                        warmup_instr = warmup;
-                    } else {
-                        adjusted_start = 0;
-                        warmup_instr = start;
-                    }
-                } else {
-                    uint64_t prev_interval = g_array_index(temp, uint64_t, i-1);
-                    uint64_t prev_end = (prev_interval + 1) * INTERVAL_SIZE;
-                    uint64_t gap = start - prev_end;
-
-                    if (warmup > gap) {
-                        adjusted_start = prev_end;
-                        warmup_instr = gap;
-                    } else {
-                        adjusted_start = start - warmup;
-                        warmup_instr = warmup;
-                    }
-                }
-            }
-
-            g_array_append_val(simpoints, start);
-            g_array_append_val(adjusted_simpoints, adjusted_start);
-            g_array_append_val(warmup_duration, warmup_instr);
-        }
-
-        g_array_free(temp, TRUE);
-        fprintf(stderr, "Loaded %d interval-based simpoints\n", simpoints->len);
-        
-        if (start_pc != 0) {
-            fprintf(stderr, "Tracing will begin at start_pc: 0x%lx\n", start_pc);
+        if (!parse_interval_simpoints(lines, start_pc, warmup, errp)) {
+            g_array_free(simpoints, TRUE);
+            g_array_free(adjusted_simpoints, TRUE);
+            simpoints = NULL;
+            adjusted_simpoints = NULL;
         }
     }
-
-out: 
-    g_strfreev(args);
-    g_strfreev(lines);
-    g_free(file_contents);
-    g_free(filename);
 }
+
 void qemu_set_dfilter_ranges(const char *filter_spec, Error **errp)
 {
     gchar **ranges = g_strsplit(filter_spec, ",", 0);

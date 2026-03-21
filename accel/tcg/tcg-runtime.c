@@ -159,6 +159,7 @@ const void *HELPER(lookup_tb_ptr)(CPUArchState *env)
     uint32_t flags;
 
     /* Force return to cpu_tb_exec so per-TB simpoint counting fires */
+    /* This effectively disables TB-chaning during counting mode */
     if (unlikely(qemu_simpoint_counting_active())) {
         return tcg_code_gen_epilogue;
     }
