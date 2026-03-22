@@ -866,8 +866,7 @@ static void emit_champsim_cheri_entry(CPUArchState *env, cpu_log_instr_info_t *i
         uint64_t cl_start = address & ~CACHE_LINE_MASK;
         uint64_t cl_end = (address + access_size - 1) & ~CACHE_LINE_MASK;
         bool spans = (cl_start != cl_end);
-        if (spans)
-            fprintf(stderr, "that she spans\n");
+
 
         if (minfo->flags & LMI_LD) {
             if (source_mem_idx < NUM_INSTR_SOURCES)
@@ -954,19 +953,154 @@ static void emit_champsim_cheri_stop(CPUArchState *env, target_ulong pc)
 
 #ifdef TARGET_CHERI
 
-static GHashTable *cap_store_tracker = NULL;
-
+#define CAP_TRACKER_EMPTY      ((target_ulong)0)
+#define CAP_TRACKER_TOMBSTONE  ((target_ulong)-1)
+#define CAP_TRACKER_INITIAL_SHIFT  20  /* 1M slots initially (~32MB) */
+#define CAP_TRACKER_LOAD_NUM   3
+#define CAP_TRACKER_LOAD_DEN   4       /* 75% load factor */
+ 
 typedef struct {
+    target_ulong vaddr;   /* key: 16-byte-aligned VA, 0=empty, -1=tombstone */
     target_ulong pesbt;
     target_ulong cursor;
-    target_ulong vaddr;     /* 16-byte aligned store address */
-} cap_store_entry_t;
-
-static void init_cap_store_tracker(void)
+} cap_store_slot_t;
+ 
+static struct {
+    cap_store_slot_t *slots;
+    uint64_t capacity;    /* always a power of 2 */
+    uint64_t mask;        /* capacity - 1 */
+    uint64_t count;       /* live entries (not counting tombstones) */
+    uint64_t tombstones;  /* tombstone count */
+} cap_tracker = { NULL, 0, 0, 0, 0 };
+ 
+static inline uint64_t cap_tracker_hash(target_ulong vaddr)
 {
-    if (!cap_store_tracker) {
-        cap_store_tracker = g_hash_table_new_full(
-            g_direct_hash, g_direct_equal, NULL, g_free);
+    /*
+     * vaddr is 16-byte-aligned, so bottom 4 bits are always zero.
+     * Shift out, then multiply by a large odd constant (golden ratio)
+     * to spread bits across the hash space.
+     */
+    uint64_t h = (uint64_t)(vaddr >> 4);
+    h *= 0x9E3779B97F4A7C15ULL;
+    return h;
+}
+ 
+static void cap_tracker_init(void)
+{
+    if (cap_tracker.slots)
+        return;
+ 
+    cap_tracker.capacity = 1ULL << CAP_TRACKER_INITIAL_SHIFT;
+    cap_tracker.mask = cap_tracker.capacity - 1;
+    cap_tracker.count = 0;
+    cap_tracker.tombstones = 0;
+    cap_tracker.slots = g_malloc0(cap_tracker.capacity *
+                                  sizeof(cap_store_slot_t));
+}
+ 
+static void cap_tracker_resize(uint64_t new_capacity)
+{
+    cap_store_slot_t *old_slots = cap_tracker.slots;
+    uint64_t old_capacity = cap_tracker.capacity;
+ 
+    cap_tracker.capacity = new_capacity;
+    cap_tracker.mask = new_capacity - 1;
+    cap_tracker.count = 0;
+    cap_tracker.tombstones = 0;
+    cap_tracker.slots = g_malloc0(new_capacity * sizeof(cap_store_slot_t));
+ 
+    /* Rehash all live entries — no tombstones in new table */
+    for (uint64_t i = 0; i < old_capacity; i++) {
+        target_ulong k = old_slots[i].vaddr;
+        if (k != CAP_TRACKER_EMPTY && k != CAP_TRACKER_TOMBSTONE) {
+            uint64_t idx = cap_tracker_hash(k) & cap_tracker.mask;
+            while (cap_tracker.slots[idx].vaddr != CAP_TRACKER_EMPTY)
+                idx = (idx + 1) & cap_tracker.mask;
+            cap_tracker.slots[idx] = old_slots[i];
+            cap_tracker.count++;
+        }
+    }
+ 
+    g_free(old_slots);
+}
+ 
+static inline void cap_tracker_maybe_grow(void)
+{
+    uint64_t used = cap_tracker.count + cap_tracker.tombstones;
+    if (used * CAP_TRACKER_LOAD_DEN < cap_tracker.capacity * CAP_TRACKER_LOAD_NUM)
+        return;
+ 
+    /*
+     * If tombstones are >25% of used slots, rehash at same size to
+     * reclaim them. Otherwise double capacity.
+     */
+    uint64_t new_cap;
+    if (cap_tracker.tombstones * 4 > used) {
+        new_cap = cap_tracker.capacity;
+    } else {
+        new_cap = cap_tracker.capacity * 2;
+    }
+ 
+    fprintf(stderr, "Cap tracker resize: %" PRIu64 " -> %" PRIu64
+            " slots (%" PRIu64 " live, %" PRIu64 " tombstones)\n",
+            cap_tracker.capacity, new_cap,
+            cap_tracker.count, cap_tracker.tombstones);
+ 
+    cap_tracker_resize(new_cap);
+}
+ 
+static void cap_tracker_insert(target_ulong vaddr, target_ulong pesbt,
+                               target_ulong cursor)
+{
+    cap_tracker_maybe_grow();
+ 
+    uint64_t idx = cap_tracker_hash(vaddr) & cap_tracker.mask;
+ 
+    while (1) {
+        target_ulong k = cap_tracker.slots[idx].vaddr;
+ 
+        if (k == vaddr) {
+            /* Key exists — update in place */
+            cap_tracker.slots[idx].pesbt = pesbt;
+            cap_tracker.slots[idx].cursor = cursor;
+            return;
+        }
+ 
+        if (k == CAP_TRACKER_EMPTY || k == CAP_TRACKER_TOMBSTONE) {
+            if (k == CAP_TRACKER_TOMBSTONE)
+                cap_tracker.tombstones--;
+            cap_tracker.slots[idx].vaddr = vaddr;
+            cap_tracker.slots[idx].pesbt = pesbt;
+            cap_tracker.slots[idx].cursor = cursor;
+            cap_tracker.count++;
+            return;
+        }
+ 
+        idx = (idx + 1) & cap_tracker.mask;
+    }
+}
+ 
+static void cap_tracker_remove(target_ulong vaddr)
+{
+    if (!cap_tracker.slots || cap_tracker.count == 0)
+        return;
+ 
+    uint64_t idx = cap_tracker_hash(vaddr) & cap_tracker.mask;
+ 
+    while (1) {
+        target_ulong k = cap_tracker.slots[idx].vaddr;
+ 
+        if (k == CAP_TRACKER_EMPTY)
+            return;  /* not found */
+ 
+        if (k == vaddr) {
+            cap_tracker.slots[idx].vaddr = CAP_TRACKER_TOMBSTONE;
+            cap_tracker.count--;
+            cap_tracker.tombstones++;
+            return;
+        }
+ 
+        idx = (idx + 1) & cap_tracker.mask;
     }
 }
 
@@ -976,38 +1110,38 @@ static void init_cap_store_tracker(void)
  */
 static void write_cap_store_header(void)
 {
-    if (!cap_store_tracker || g_hash_table_size(cap_store_tracker) == 0)
+    if (!cap_tracker.slots || cap_tracker.count == 0)
         return;
  
-    fprintf(stderr, "Writing %u pre-SimPoint capability stores\n",
-            g_hash_table_size(cap_store_tracker));
+    fprintf(stderr, "Writing %" PRIu64 " pre-SimPoint capability stores\n",
+            cap_tracker.count);
  
     FILE *logfile = qemu_log_lock();
  
-    GHashTableIter iter;
-    gpointer key, value;
-    g_hash_table_iter_init(&iter, cap_store_tracker);
- 
-    while (g_hash_table_iter_next(&iter, &key, &value)) {
-        cap_store_entry_t *entry = (cap_store_entry_t *)value;
+    for (uint64_t i = 0; i < cap_tracker.capacity; i++) {
+        target_ulong k = cap_tracker.slots[i].vaddr;
+        if (k == CAP_TRACKER_EMPTY || k == CAP_TRACKER_TOMBSTONE)
+            continue;
  
         cap_register_t cr;
-        CAP_cc(decompress_raw)(entry->pesbt, entry->cursor, true, &cr);
+        CAP_cc(decompress_raw)(cap_tracker.slots[i].pesbt,
+                               cap_tracker.slots[i].cursor, true, &cr);
  
-        champsim_cheri_trace_entry_t trace = {0}; /*We only care about the store address and capability metadata*/
-        trace.destination_memory[0]  = entry->vaddr;
-        trace.cap_tag                = 1;  /* Only tagged caps are in the table */
-        trace.cap_base               = cap_get_base(&cr);
-        trace.cap_length             = cap_get_length_sat(&cr);
-        trace.cap_offset             = cap_get_offset(&cr);
-        trace.cap_perms              = cap_get_perms(&cr);
-        trace.cap_op                 = CAP_OP_PRESIMPOINT;
+        champsim_cheri_trace_entry_t trace = {0};
+        trace.destination_memory[0] = k;
+        trace.cap_tag               = 1;
+        trace.cap_base              = cap_get_base(&cr);
+        trace.cap_length            = cap_get_length_sat(&cr);
+        trace.cap_offset            = cap_get_offset(&cr);
+        trace.cap_perms             = cap_get_perms(&cr);
+        trace.cap_op                = CAP_OP_PRESIMPOINT;
  
         fwrite(&trace, sizeof(trace), 1, logfile);
     }
  
     qemu_log_unlock(logfile);
 }
+
 #endif
 
 
@@ -1896,7 +2030,7 @@ void qemu_simpoint_count_tb(CPUArchState *env, target_ulong tb_pc,
         if (m.should_trace) {
             fprintf(stderr,
                 "SimPoint %d reached at %" PRIu64 " instructions"
-                " (warmup instructions: %" PRIu64 " simpoint start: %" PRIu64
+                " (warmup: %" PRIu64 " simpoint start: %" PRIu64
                 "). Enabling CF_LOG_INSTR\n",
                 m.idx, sp_state.instr_count,
                 g_array_index(adjusted_simpoints, uint64_t, m.idx),
@@ -1999,30 +2133,20 @@ void qemu_simpoint_track_cap_store(CPUArchState *env, target_ulong vaddr,
                                    bool tag, target_ulong pesbt,
                                    target_ulong cursor)
 {
-    /* Track whenever simpoints are configured so we can get stores before the simpoint region*/
     if (sp_state.mode == SIMPOINT_MODE_INACTIVE && !simpoints && !simpoint_pcs)
         return;
  
-    /* Only track user-mode stores — simpoints are user-mode only */
     if (!cpu_in_user_mode(env))
         return;
  
-    init_cap_store_tracker();
+    cap_tracker_init();
  
     target_ulong aligned = vaddr & ~((target_ulong)15);
  
     if (tag) {
-        /* Tagged capability store — insert/update tracker */
-        cap_store_entry_t *entry = g_new(cap_store_entry_t, 1);
-        entry->pesbt  = pesbt;
-        entry->cursor = cursor;
-        entry->vaddr  = aligned;
-        g_hash_table_replace(cap_store_tracker,
-                             GSIZE_TO_POINTER(aligned), entry);
+        cap_tracker_insert(aligned, pesbt, cursor);
     } else {
-        /* Untagged capability store — remove from tracker */
-        g_hash_table_remove(cap_store_tracker,
-                            GSIZE_TO_POINTER(aligned));
+        cap_tracker_remove(aligned);
     }
 }
  
@@ -2035,18 +2159,18 @@ void qemu_simpoint_invalidate_cap(target_ulong vaddr, int32_t size)
 {
     if (sp_state.mode == SIMPOINT_MODE_INACTIVE && !simpoints && !simpoint_pcs)
         return;
- 
-    if (!cap_store_tracker)
+    if (!cap_tracker.slots)
         return;
-
+ 
     target_ulong start = vaddr & ~((target_ulong)15);
     target_ulong end   = (vaddr + size - 1) & ~((target_ulong)15);
  
-    g_hash_table_remove(cap_store_tracker, GSIZE_TO_POINTER(start));
+    cap_tracker_remove(start);
     if (end != start)
-        g_hash_table_remove(cap_store_tracker, GSIZE_TO_POINTER(end));
+        cap_tracker_remove(end);
 }
-#endif
+
+#endif /* TARGET_CHERI */
 
 /*
  *  A printf that takes an array of argments unioned of all possible argument

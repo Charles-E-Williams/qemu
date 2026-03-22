@@ -377,6 +377,9 @@ void cheri_tag_invalidate(CPUArchState *env, target_ulong vaddr, int32_t size,
     if (likely(tag_start.value == tag_end.value)) {
         // Common case, only one tag (i.e. an aligned store)
         cheri_tag_invalidate_one(env, vaddr, size, pc, mmu_idx);
+#if defined(CONFIG_TCG_LOG_INSTR)
+        qemu_simpoint_invalidate_cap(vaddr, size);
+#endif
         return;
     }
     // Unaligned store -> can cross a capabiblity alignment boundary and

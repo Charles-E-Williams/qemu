@@ -219,7 +219,7 @@ void qemu_log_instr_simpoint_start(CPUArchState *env, target_ulong pc);
 /*
  * Stop instruction tracing outside of SimPoint region
  */
-void qemu_log_instr_simpoint_start(CPUArchState *env, target_ulong pc);
+void qemu_log_instr_simpoint_stop(CPUArchState *env, target_ulong pc);
 
 /*
  * Log a switch inc CPU modes.
