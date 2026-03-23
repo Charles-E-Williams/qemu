@@ -1735,6 +1735,12 @@ void qemu_log_instr_mode_switch(CPUArchState *env,
         cpulog->loglevel != QEMU_LOG_INSTR_LOGLEVEL_USER)
         return;
 
+    /* Don't touch CF_LOG_INSTR if simpoint has logging suppressed */
+    if (sp_state.mode == SIMPOINT_MODE_COUNTING ||
+        sp_state.mode == SIMPOINT_MODE_WAIT_START_PC ||
+        sp_state.mode == SIMPOINT_MODE_STEPPING_TO_START)
+        return;
+        
     /* Check if we are switching to an interesting mode */
     if ((mode == QEMU_LOG_INSTR_CPU_USER) != cpulog->loglevel_active) {
         cpu_loglevel_switch(env, cpulog->loglevel);
@@ -2675,6 +2681,9 @@ void helper_qemu_log_instr_simpoint_start(CPUArchState *env, target_ulong pc)
     } else {
         sp_state.mode = SIMPOINT_MODE_COUNTING;
     } 
+
+
+    cpu_loglevel_switch(env, QEMU_LOG_INSTR_LOGLEVEL_NONE);
 
     /* Flushing forces TBs to recompile
     *  The flag that determines whether or not we log is baked into the TBs,
