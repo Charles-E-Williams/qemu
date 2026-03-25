@@ -475,7 +475,9 @@ void qemu_plugin_vcpu_mem_cb(CPUState *cpu, uint64_t vaddr, uint32_t info)
     GArray *arr = cpu->plugin_mem_cbs;
     size_t i;
 
-    cpu->plugin_mem_value = vaddr;
+    qemu_plugin_cheri_meminfo.meminfo = info;
+    qemu_plugin_cheri_meminfo.in_mem_cb = true;
+    qemu_plugin_cheri_meminfo.xfer_valid = false;
     if (arr == NULL) {
         return;
     }
@@ -498,36 +500,40 @@ void qemu_plugin_vcpu_mem_cb(CPUState *cpu, uint64_t vaddr, uint32_t info)
             g_assert_not_reached();
         }
     }
+    qemu_plugin_cheri_meminfo.in_mem_cb = false;
 }
 
-void qemu_plugin_vcpu_cheri_set_mem_info(CPUState *cpu, uint64_t vaddr,
-                                         uint32_t meminfo,
-                                         uint32_t auth_regnum, bool auth_is_ddc,
-                                         bool auth_valid,
-                                         uint8_t auth_tag, uint32_t auth_perms,
-                                         uint64_t auth_base,
-                                         uint64_t auth_length,
-                                         uint64_t auth_offset,
-                                         bool xfer_valid,
-                                         uint8_t xfer_tag, uint32_t xfer_perms,
-                                         uint64_t xfer_base,
-                                         uint64_t xfer_length,
-                                         uint64_t xfer_offset)
+void qemu_plugin_vcpu_cheri_set_auth(CPUState *cpu, uint32_t auth_regnum,
+                                     bool auth_is_ddc, uint8_t auth_tag,
+                                     uint32_t auth_perms, uint64_t auth_base,
+                                     uint64_t auth_length,
+                                     uint64_t auth_offset)
 {
     (void)cpu;
 #ifdef TARGET_CHERI
     qemu_plugin_cheri_meminfo.valid = true;
-    qemu_plugin_cheri_meminfo.vaddr = vaddr;
-    qemu_plugin_cheri_meminfo.meminfo = meminfo;
     qemu_plugin_cheri_meminfo.auth_regnum = auth_regnum;
     qemu_plugin_cheri_meminfo.auth_is_ddc = auth_is_ddc;
-    qemu_plugin_cheri_meminfo.auth_valid = auth_valid;
+    qemu_plugin_cheri_meminfo.auth_valid = true;
     qemu_plugin_cheri_meminfo.auth_tag = auth_tag;
     qemu_plugin_cheri_meminfo.auth_perms = auth_perms;
     qemu_plugin_cheri_meminfo.auth_base = auth_base;
     qemu_plugin_cheri_meminfo.auth_length = auth_length;
     qemu_plugin_cheri_meminfo.auth_offset = auth_offset;
-    qemu_plugin_cheri_meminfo.xfer_valid = xfer_valid;
+#endif
+}
+
+void qemu_plugin_vcpu_cheri_set_mem_cap(CPUState *cpu, bool is_store,
+                                        uint8_t xfer_tag, uint32_t xfer_perms,
+                                        uint64_t xfer_base,
+                                        uint64_t xfer_length,
+                                        uint64_t xfer_offset)
+{
+    (void)cpu;
+#ifdef TARGET_CHERI
+    qemu_plugin_cheri_meminfo.valid = true;
+    qemu_plugin_cheri_meminfo.xfer_valid = true;
+    qemu_plugin_cheri_meminfo.xfer_is_store = is_store;
     qemu_plugin_cheri_meminfo.xfer_tag = xfer_tag;
     qemu_plugin_cheri_meminfo.xfer_perms = xfer_perms;
     qemu_plugin_cheri_meminfo.xfer_base = xfer_base;

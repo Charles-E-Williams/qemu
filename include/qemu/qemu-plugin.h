@@ -477,26 +477,26 @@ bool qemu_plugin_mem_is_big_endian(qemu_plugin_meminfo_t info);
 bool qemu_plugin_mem_is_store(qemu_plugin_meminfo_t info);
 
 /**
- * qemu_plugin_mem_get_cheri_auth() - get CHERI auth capability metadata
+ * qemu_plugin_get_auth_cap() - get CHERI auth capability metadata
  * @info: opaque memory transaction handle
  * @auth: output structure populated on success
  *
  * Returns: true when CHERI auth metadata is available for the current
  * memory callback, false otherwise.
  */
-bool qemu_plugin_mem_get_cheri_auth(qemu_plugin_meminfo_t info,
-                                    struct qemu_plugin_cheri_auth *auth);
+bool qemu_plugin_get_auth_cap(qemu_plugin_meminfo_t info,
+                              struct qemu_plugin_cheri_auth *auth);
 
 /**
- * qemu_plugin_mem_get_cheri_transfer() - get transferred capability metadata
+ * qemu_plugin_mem_get_cap() - get transferred capability metadata
  * @info: opaque memory transaction handle
  * @xfer: output structure populated on success
  *
  * Returns: true when transferred capability metadata is available for the
  * current memory callback, false otherwise.
  */
-bool qemu_plugin_mem_get_cheri_transfer(qemu_plugin_meminfo_t info,
-                                        struct qemu_plugin_cheri_transfer *xfer);
+bool qemu_plugin_mem_get_cap(qemu_plugin_meminfo_t info,
+                             struct qemu_plugin_cheri_transfer *xfer);
 
 /**
  * qemu_plugin_get_hwaddr() - return handle for memory operation

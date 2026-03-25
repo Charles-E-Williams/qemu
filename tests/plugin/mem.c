@@ -107,12 +107,20 @@ static void vcpu_mem(unsigned int cpu_index, qemu_plugin_meminfo_t meminfo,
         fprintf(out_fp, "cpu=%u %c vaddr=0x%" PRIx64 " size=%u",
                 cpu_index, qemu_plugin_mem_is_store(meminfo) ? 'W' : 'R',
                 vaddr, 1u << qemu_plugin_mem_size_shift(meminfo));
-        if (qemu_plugin_mem_get_cheri_auth(meminfo, &auth)) {
+        if (qemu_plugin_get_auth_cap(meminfo, &auth)) {
             fprintf(out_fp,
                     " auth_src=%s%u auth_tag=%u auth_perms=0x%x auth_base=0x%" PRIx64
                     " auth_len=0x%" PRIx64 " auth_off=0x%" PRIx64,
                     auth.is_ddc ? "DDC" : "c", auth.regnum, auth.tag,
                     auth.perms, auth.base, auth.length, auth.offset);
+        }
+        struct qemu_plugin_cheri_transfer mem_cap;
+        if (qemu_plugin_mem_get_cap(meminfo, &mem_cap)) {
+            fprintf(out_fp,
+                    " cap_tag=%u cap_perms=0x%x cap_base=0x%" PRIx64
+                    " cap_len=0x%" PRIx64 " cap_off=0x%" PRIx64,
+                    mem_cap.tag, mem_cap.perms, mem_cap.base,
+                    mem_cap.length, mem_cap.offset);
         }
         fputc('\n', out_fp);
     }

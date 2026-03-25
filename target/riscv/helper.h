@@ -61,6 +61,8 @@ DEF_HELPER_FLAGS_1(fclass_d, TCG_CALL_NO_RWG_SE, tl, i64)
 
 #ifdef TARGET_CHERI
 #include "cheri-helper-common.h"
+DEF_HELPER_2(plugin_set_mem_auth_capreg, void, env, i32)
+DEF_HELPER_1(plugin_set_mem_auth_ddc, void, env)
 DEF_HELPER_4(cspecialrw, void, env, i32, i32, i32)
 DEF_HELPER_3(auipcc, void, env, i32, tl)
 DEF_HELPER_4(cjal, void, env, i32, tl, tl)

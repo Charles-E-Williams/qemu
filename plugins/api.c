@@ -260,17 +260,15 @@ bool qemu_plugin_mem_is_store(qemu_plugin_meminfo_t info)
     return !!(info & TRACE_MEM_ST);
 }
 
-bool qemu_plugin_mem_get_cheri_auth(qemu_plugin_meminfo_t info,
-                                    struct qemu_plugin_cheri_auth *auth)
+bool qemu_plugin_get_auth_cap(qemu_plugin_meminfo_t info,
+                              struct qemu_plugin_cheri_auth *auth)
 {
 #ifdef TARGET_CHERI
-    CPUState *cpu = current_cpu;
-
     if (!auth) {
         return false;
     }
-    if (!cpu || !qemu_plugin_cheri_meminfo.valid ||
-        qemu_plugin_cheri_meminfo.vaddr != (uint64_t)cpu->plugin_mem_value ||
+    if (!qemu_plugin_cheri_meminfo.valid ||
+        !qemu_plugin_cheri_meminfo.in_mem_cb ||
         qemu_plugin_cheri_meminfo.meminfo != info ||
         !qemu_plugin_cheri_meminfo.auth_valid) {
         return false;
@@ -290,22 +288,20 @@ bool qemu_plugin_mem_get_cheri_auth(qemu_plugin_meminfo_t info,
 #endif
 }
 
-bool qemu_plugin_mem_get_cheri_transfer(qemu_plugin_meminfo_t info,
-                                        struct qemu_plugin_cheri_transfer *xfer)
+bool qemu_plugin_mem_get_cap(qemu_plugin_meminfo_t info,
+                             struct qemu_plugin_cheri_transfer *xfer)
 {
 #ifdef TARGET_CHERI
-    CPUState *cpu = current_cpu;
-
     if (!xfer) {
         return false;
     }
-    if (!cpu || !qemu_plugin_cheri_meminfo.valid ||
-        qemu_plugin_cheri_meminfo.vaddr != (uint64_t)cpu->plugin_mem_value ||
+    if (!qemu_plugin_cheri_meminfo.valid ||
+        !qemu_plugin_cheri_meminfo.in_mem_cb ||
         qemu_plugin_cheri_meminfo.meminfo != info ||
         !qemu_plugin_cheri_meminfo.xfer_valid) {
         return false;
     }
-    xfer->is_store = !!(qemu_plugin_cheri_meminfo.meminfo & TRACE_MEM_ST);
+    xfer->is_store = qemu_plugin_cheri_meminfo.xfer_is_store;
     xfer->tag = qemu_plugin_cheri_meminfo.xfer_tag;
     xfer->perms = qemu_plugin_cheri_meminfo.xfer_perms;
     xfer->base = qemu_plugin_cheri_meminfo.xfer_base;

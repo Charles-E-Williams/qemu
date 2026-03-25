@@ -1538,17 +1538,14 @@ void load_cap_from_memory(CPUArchState *env, uint32_t cd, uint32_t cb,
     target_ulong cursor;
     bool tag = load_cap_from_memory_raw(env, &pesbt, &cursor, cb, source, vaddr,
                                         retpc, physaddr);
-#ifdef CONFIG_PLUGIN
-    qemu_plugin_vcpu_cheri_set_mem_info(
-        env_cpu(env), vaddr,
-        trace_mem_build_info(CHERI_CAP_SHIFT, false, MO_TE, false,
-                             cpu_mmu_index(env, false)),
-        cb, cb == CHERI_EXC_REGNUM_DDC, true,
-        source->cr_tag, cap_get_perms(source), cap_get_base(source),
-        cap_get_length64(source), cap_get_offset(source),
-        true, tag, CAP_cc(compress_mem_raw)(pesbt), cap_get_base(&CAP_cc(decompress_128cap_already_xored)(pesbt, cursor, tag)),
-        cap_get_length64(&CAP_cc(decompress_128cap_already_xored)(pesbt, cursor, tag)),
-        cap_get_offset(&CAP_cc(decompress_128cap_already_xored)(pesbt, cursor, tag)));
+#if defined(TARGET_RISCV) && defined(CONFIG_PLUGIN)
+    cap_register_t loaded_cap;
+    CAP_cc(decompress_raw)(pesbt, cursor, tag, &loaded_cap);
+    qemu_plugin_vcpu_cheri_set_mem_cap(env_cpu(env), false, tag,
+                                       cap_get_perms(&loaded_cap),
+                                       cap_get_base(&loaded_cap),
+                                       cap_get_length64(&loaded_cap),
+                                       cap_get_offset(&loaded_cap));
 #endif
     update_compressed_capreg(env, cd, pesbt, tag, cursor);
 }
@@ -1565,6 +1562,16 @@ void store_cap_to_memory_mmu_index(CPUArchState *env, uint32_t cs,
     }
 #endif
     bool tag = get_capreg_tag_filtered(env, cs);
+#if defined(TARGET_RISCV) && defined(CONFIG_PLUGIN)
+    const target_ulong pesbt = pesbt_for_mem ^ CAP_NULL_XOR_MASK;
+    cap_register_t stored_cap;
+    CAP_cc(decompress_raw)(pesbt, cursor, tag, &stored_cap);
+    qemu_plugin_vcpu_cheri_set_mem_cap(env_cpu(env), true, tag,
+                                       cap_get_perms(&stored_cap),
+                                       cap_get_base(&stored_cap),
+                                       cap_get_length64(&stored_cap),
+                                       cap_get_offset(&stored_cap));
+#endif
     if (cs == NULL_CAPREG_INDEX) {
         tcg_debug_assert(pesbt_for_mem == 0 && "Wrong value for cnull?");
         tcg_debug_assert(cursor == 0 && "Wrong value for cnull?");

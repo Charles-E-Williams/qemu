@@ -153,6 +153,29 @@ static inline void generate_get_ddc_checked_gpr_plus_offset(
     check_ddc(addr, ctx, /* overwrite addr */ (TCGv)addr, memop_size(mop));
 }
 
+#if defined(TARGET_RISCV) && defined(CONFIG_PLUGIN)
+static inline void generate_plugin_set_mem_auth_capreg(uint32_t capreg)
+{
+    TCGv_i32 tcapreg = tcg_const_i32(capreg);
+    gen_helper_plugin_set_mem_auth_capreg(cpu_env, tcapreg);
+    tcg_temp_free_i32(tcapreg);
+}
+
+static inline void generate_plugin_set_mem_auth_ddc(void)
+{
+    gen_helper_plugin_set_mem_auth_ddc(cpu_env);
+}
+#else
+static inline void generate_plugin_set_mem_auth_capreg(uint32_t capreg)
+{
+    (void)capreg;
+}
+
+static inline void generate_plugin_set_mem_auth_ddc(void)
+{
+}
+#endif
+
 static inline bool have_cheri_tb_flags(DisasContext *ctx, uint32_t flags)
 {
     return (ctx->base.cheri_flags & flags) == flags;

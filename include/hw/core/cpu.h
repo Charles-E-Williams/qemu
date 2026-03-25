@@ -365,7 +365,6 @@ struct CPUState {
     int64_t icount_extra;
     uint64_t breakcount;
     uint64_t random_seed;
-    uint64_t plugin_mem_value;
     sigjmp_buf jmp_env;
 
     QemuMutex work_mutex;
