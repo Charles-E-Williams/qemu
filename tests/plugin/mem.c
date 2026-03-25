@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <glib.h>
 #include <sys/wait.h>
+#include <errno.h>
 
 #include <qemu-plugin.h>
 
@@ -46,7 +47,12 @@ static void plugin_exit(qemu_plugin_id_t id, void *p)
     qemu_plugin_outs(out->str);
 
     if (out_fp) {
-        fclose(out_fp);
+        if (fflush(out_fp) != 0 || fclose(out_fp) != 0) {
+            g_autofree gchar *msg = g_strdup_printf("failed to flush/close output '%s': %s\n",
+                                                    out_path ? out_path : "(null)",
+                                                    g_strerror(errno));
+            qemu_plugin_outs(msg);
+        }
         out_fp = NULL;
     }
     if (do_xz && out_path) {
@@ -156,7 +162,8 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
     if (do_text && out_path) {
         out_fp = fopen(out_path, "w");
         if (!out_fp) {
-            g_autofree gchar *msg = g_strdup_printf("failed to open output: %s\n", out_path);
+            g_autofree gchar *msg = g_strdup_printf("failed to open output '%s': %s\n",
+                                                    out_path, g_strerror(errno));
             qemu_plugin_outs(msg);
             return -1;
         }

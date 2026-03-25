@@ -410,7 +410,7 @@ struct qemu_plugin_hwaddr;
  * memory operation. This is not itself a memory access.
  */
 struct qemu_plugin_cheri_auth {
-    /** register number of authorizing capability, or special DDC number */
+    /** register number of authorizing capability, or CHERI_EXC_REGNUM_DDC */
     uint32_t regnum;
     /** true when the source is DDC */
     bool is_ddc;
