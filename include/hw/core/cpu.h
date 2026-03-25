@@ -365,6 +365,7 @@ struct CPUState {
     int64_t icount_extra;
     uint64_t breakcount;
     uint64_t random_seed;
+    uint64_t plugin_mem_value;
     sigjmp_buf jmp_env;
 
     QemuMutex work_mutex;
@@ -410,19 +411,7 @@ struct CPUState {
     DECLARE_BITMAP(plugin_mask, QEMU_PLUGIN_EV_MAX);
 
 #ifdef CONFIG_PLUGIN
-typedef struct CPUPluginCHERIAuthInfo {
-    bool valid;
-    uint32_t regnum;
-    bool is_ddc;
-    uint8_t tag;
-    uint32_t perms;
-    uint64_t base;
-    uint64_t length;
-    uint64_t offset;
-} CPUPluginCHERIAuthInfo;
-
     GArray *plugin_mem_cbs;
-    CPUPluginCHERIAuthInfo plugin_cheri_auth;
     /* saved iotlb data from io_writex */
     SavedIOTLB saved_iotlb;
 #endif

@@ -427,6 +427,27 @@ struct qemu_plugin_cheri_auth {
 };
 
 /**
+ * struct qemu_plugin_cheri_transfer - CHERI transferred capability metadata
+ *
+ * Metadata for the capability value transferred by the current memory operation
+ * (capability load or store). This is present only for capability transfers.
+ */
+struct qemu_plugin_cheri_transfer {
+    /** true when this memory callback corresponds to a capability store */
+    bool is_store;
+    /** tag bit of transferred capability */
+    uint8_t tag;
+    /** permissions mask of transferred capability */
+    uint32_t perms;
+    /** base of transferred capability */
+    uint64_t base;
+    /** length of transferred capability */
+    uint64_t length;
+    /** current offset of transferred capability */
+    uint64_t offset;
+};
+
+/**
  * qemu_plugin_mem_size_shift() - get size of access
  * @info: opaque memory transaction handle
  *
@@ -465,6 +486,17 @@ bool qemu_plugin_mem_is_store(qemu_plugin_meminfo_t info);
  */
 bool qemu_plugin_mem_get_cheri_auth(qemu_plugin_meminfo_t info,
                                     struct qemu_plugin_cheri_auth *auth);
+
+/**
+ * qemu_plugin_mem_get_cheri_transfer() - get transferred capability metadata
+ * @info: opaque memory transaction handle
+ * @xfer: output structure populated on success
+ *
+ * Returns: true when transferred capability metadata is available for the
+ * current memory callback, false otherwise.
+ */
+bool qemu_plugin_mem_get_cheri_transfer(qemu_plugin_meminfo_t info,
+                                        struct qemu_plugin_cheri_transfer *xfer);
 
 /**
  * qemu_plugin_get_hwaddr() - return handle for memory operation

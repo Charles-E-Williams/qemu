@@ -41,6 +41,7 @@
 #include "exec/exec-all.h"
 #include "exec/helper-proto.h"
 #include "exec/memop.h"
+#include "qemu/plugin.h"
 
 #include "cheri-helper-utils.h"
 #include "cheri_tagmem.h"
@@ -1537,6 +1538,18 @@ void load_cap_from_memory(CPUArchState *env, uint32_t cd, uint32_t cb,
     target_ulong cursor;
     bool tag = load_cap_from_memory_raw(env, &pesbt, &cursor, cb, source, vaddr,
                                         retpc, physaddr);
+#ifdef CONFIG_PLUGIN
+    qemu_plugin_vcpu_cheri_set_mem_info(
+        env_cpu(env), vaddr,
+        trace_mem_build_info(CHERI_CAP_SHIFT, false, MO_TE, false,
+                             cpu_mmu_index(env, false)),
+        cb, cb == CHERI_EXC_REGNUM_DDC, true,
+        source->cr_tag, cap_get_perms(source), cap_get_base(source),
+        cap_get_length64(source), cap_get_offset(source),
+        true, tag, CAP_cc(compress_mem_raw)(pesbt), cap_get_base(&CAP_cc(decompress_128cap_already_xored)(pesbt, cursor, tag)),
+        cap_get_length64(&CAP_cc(decompress_128cap_already_xored)(pesbt, cursor, tag)),
+        cap_get_offset(&CAP_cc(decompress_128cap_already_xored)(pesbt, cursor, tag)));
+#endif
     update_compressed_capreg(env, cd, pesbt, tag, cursor);
 }
 

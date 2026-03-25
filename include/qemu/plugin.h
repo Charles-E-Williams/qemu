@@ -39,6 +39,30 @@ typedef QTAILQ_HEAD(, qemu_plugin_desc) QemuPluginList;
 #ifdef CONFIG_PLUGIN
 extern QemuOptsList qemu_plugin_opts;
 
+#ifdef TARGET_CHERI
+typedef struct PluginCHERIMemInfo {
+    bool valid;
+    uint64_t vaddr;
+    uint32_t meminfo;
+    uint32_t auth_regnum;
+    bool auth_is_ddc;
+    bool auth_valid;
+    uint8_t auth_tag;
+    uint32_t auth_perms;
+    uint64_t auth_base;
+    uint64_t auth_length;
+    uint64_t auth_offset;
+    bool xfer_valid;
+    uint8_t xfer_tag;
+    uint32_t xfer_perms;
+    uint64_t xfer_base;
+    uint64_t xfer_length;
+    uint64_t xfer_offset;
+} PluginCHERIMemInfo;
+
+extern __thread PluginCHERIMemInfo qemu_plugin_cheri_meminfo;
+#endif
+
 static inline void qemu_plugin_add_opts(void)
 {
     qemu_add_opts(&qemu_plugin_opts);
@@ -182,12 +206,20 @@ qemu_plugin_vcpu_syscall(CPUState *cpu, int64_t num, uint64_t a1,
 void qemu_plugin_vcpu_syscall_ret(CPUState *cpu, int64_t num, int64_t ret);
 
 void qemu_plugin_vcpu_mem_cb(CPUState *cpu, uint64_t vaddr, uint32_t meminfo);
-void qemu_plugin_vcpu_set_cheri_mem_auth(CPUState *cpu, uint32_t regnum,
-                                         bool is_ddc,
-                                         uint8_t tag, uint32_t perms,
-                                         uint64_t base, uint64_t length,
-                                         uint64_t offset);
-void qemu_plugin_vcpu_clear_cheri_mem_auth(CPUState *cpu);
+void qemu_plugin_vcpu_cheri_set_mem_info(CPUState *cpu, uint64_t vaddr,
+                                         uint32_t meminfo,
+                                         uint32_t auth_regnum, bool auth_is_ddc,
+                                         bool auth_valid,
+                                         uint8_t auth_tag, uint32_t auth_perms,
+                                         uint64_t auth_base,
+                                         uint64_t auth_length,
+                                         uint64_t auth_offset,
+                                         bool xfer_valid,
+                                         uint8_t xfer_tag, uint32_t xfer_perms,
+                                         uint64_t xfer_base,
+                                         uint64_t xfer_length,
+                                         uint64_t xfer_offset);
+void qemu_plugin_vcpu_cheri_clear_mem_info(CPUState *cpu);
 
 void qemu_plugin_flush_cb(void);
 
@@ -244,17 +276,26 @@ static inline void qemu_plugin_vcpu_mem_cb(CPUState *cpu, uint64_t vaddr,
                                             uint32_t meminfo)
 { }
 
-static inline void qemu_plugin_vcpu_set_cheri_mem_auth(CPUState *cpu,
-                                                        uint32_t regnum,
-                                                        bool is_ddc,
-                                                        uint8_t tag,
-                                                        uint32_t perms,
-                                                        uint64_t base,
-                                                        uint64_t length,
-                                                        uint64_t offset)
+static inline void qemu_plugin_vcpu_cheri_set_mem_info(CPUState *cpu,
+                                                        uint64_t vaddr,
+                                                        uint32_t meminfo,
+                                                        uint32_t auth_regnum,
+                                                        bool auth_is_ddc,
+                                                        bool auth_valid,
+                                                        uint8_t auth_tag,
+                                                        uint32_t auth_perms,
+                                                        uint64_t auth_base,
+                                                        uint64_t auth_length,
+                                                        uint64_t auth_offset,
+                                                        bool xfer_valid,
+                                                        uint8_t xfer_tag,
+                                                        uint32_t xfer_perms,
+                                                        uint64_t xfer_base,
+                                                        uint64_t xfer_length,
+                                                        uint64_t xfer_offset)
 { }
 
-static inline void qemu_plugin_vcpu_clear_cheri_mem_auth(CPUState *cpu)
+static inline void qemu_plugin_vcpu_cheri_clear_mem_info(CPUState *cpu)
 { }
 
 static inline void qemu_plugin_flush_cb(void)
