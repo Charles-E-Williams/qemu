@@ -39,7 +39,6 @@ typedef QTAILQ_HEAD(, qemu_plugin_desc) QemuPluginList;
 #ifdef CONFIG_PLUGIN
 extern QemuOptsList qemu_plugin_opts;
 
-#ifdef TARGET_CHERI
 typedef struct PluginCHERIMemInfo {
     bool valid;
     bool in_mem_cb;
@@ -62,7 +61,6 @@ typedef struct PluginCHERIMemInfo {
 } PluginCHERIMemInfo;
 
 extern __thread PluginCHERIMemInfo qemu_plugin_cheri_meminfo;
-#endif
 
 static inline void qemu_plugin_add_opts(void)
 {

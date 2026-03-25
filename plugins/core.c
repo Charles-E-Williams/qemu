@@ -33,9 +33,7 @@
 #include "plugin.h"
 #include "qemu/compiler.h"
 
-#ifdef TARGET_CHERI
 __thread PluginCHERIMemInfo qemu_plugin_cheri_meminfo;
-#endif
 
 struct qemu_plugin_cb {
     struct qemu_plugin_ctx *ctx;
@@ -511,7 +509,6 @@ void qemu_plugin_vcpu_cheri_set_auth(CPUState *cpu, uint32_t auth_regnum,
                                      uint64_t auth_offset)
 {
     (void)cpu;
-#ifdef TARGET_CHERI
     qemu_plugin_cheri_meminfo.valid = true;
     qemu_plugin_cheri_meminfo.auth_regnum = auth_regnum;
     qemu_plugin_cheri_meminfo.auth_is_ddc = auth_is_ddc;
@@ -521,7 +518,6 @@ void qemu_plugin_vcpu_cheri_set_auth(CPUState *cpu, uint32_t auth_regnum,
     qemu_plugin_cheri_meminfo.auth_base = auth_base;
     qemu_plugin_cheri_meminfo.auth_length = auth_length;
     qemu_plugin_cheri_meminfo.auth_offset = auth_offset;
-#endif
 }
 
 void qemu_plugin_vcpu_cheri_set_mem_cap(CPUState *cpu, bool is_store,
@@ -531,7 +527,6 @@ void qemu_plugin_vcpu_cheri_set_mem_cap(CPUState *cpu, bool is_store,
                                         uint64_t xfer_offset)
 {
     (void)cpu;
-#ifdef TARGET_CHERI
     qemu_plugin_cheri_meminfo.valid = true;
     qemu_plugin_cheri_meminfo.xfer_valid = true;
     qemu_plugin_cheri_meminfo.xfer_is_store = is_store;
@@ -540,15 +535,12 @@ void qemu_plugin_vcpu_cheri_set_mem_cap(CPUState *cpu, bool is_store,
     qemu_plugin_cheri_meminfo.xfer_base = xfer_base;
     qemu_plugin_cheri_meminfo.xfer_length = xfer_length;
     qemu_plugin_cheri_meminfo.xfer_offset = xfer_offset;
-#endif
 }
 
 void qemu_plugin_vcpu_cheri_clear_mem_info(CPUState *cpu)
 {
     (void)cpu;
-#ifdef TARGET_CHERI
     qemu_plugin_cheri_meminfo.valid = false;
-#endif
 }
 
 void qemu_plugin_atexit_cb(void)

@@ -263,7 +263,6 @@ bool qemu_plugin_mem_is_store(qemu_plugin_meminfo_t info)
 bool qemu_plugin_get_auth_cap(qemu_plugin_meminfo_t info,
                               struct qemu_plugin_cheri_auth *auth)
 {
-#ifdef TARGET_CHERI
     if (!auth) {
         return false;
     }
@@ -281,17 +280,11 @@ bool qemu_plugin_get_auth_cap(qemu_plugin_meminfo_t info,
     auth->length = qemu_plugin_cheri_meminfo.auth_length;
     auth->offset = qemu_plugin_cheri_meminfo.auth_offset;
     return true;
-#else
-    (void)info;
-    (void)auth;
-    return false;
-#endif
 }
 
 bool qemu_plugin_mem_get_cap(qemu_plugin_meminfo_t info,
                              struct qemu_plugin_cheri_transfer *xfer)
 {
-#ifdef TARGET_CHERI
     if (!xfer) {
         return false;
     }
@@ -308,11 +301,6 @@ bool qemu_plugin_mem_get_cap(qemu_plugin_meminfo_t info,
     xfer->length = qemu_plugin_cheri_meminfo.xfer_length;
     xfer->offset = qemu_plugin_cheri_meminfo.xfer_offset;
     return true;
-#else
-    (void)info;
-    (void)xfer;
-    return false;
-#endif
 }
 
 /*
