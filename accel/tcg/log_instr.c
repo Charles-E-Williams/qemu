@@ -1312,6 +1312,8 @@ static bool handle_interval_simpoints(CPUArchState *env, cpu_log_instr_info_t *i
             fprintf(stderr,
                     "SimPoint %d ended, counting mode at icount=%" PRIu64 "\n",
                     finished_idx, sp_state.instr_count - 1);
+
+            tb_flush(env_cpu(env));
         } else {
             
              //All SimPoints done. Shut down.
@@ -2049,6 +2051,10 @@ void qemu_simpoint_count_tb(CPUArchState *env, target_ulong tb_pc,
 
             global_loglevel_enable();
             cpu_loglevel_switch(env, QEMU_LOG_INSTR_LOGLEVEL_USER);
+
+
+            tb_flush(env_cpu(env));
+            cpu_loop_exit(env_cpu(env));
         }
 
         /* Check if we're past all simpoints */
