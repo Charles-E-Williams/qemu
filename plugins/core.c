@@ -477,6 +477,7 @@ void qemu_plugin_vcpu_mem_cb(CPUState *cpu, uint64_t vaddr, uint32_t info)
 
     qemu_plugin_cheri_meminfo.meminfo = info;
     qemu_plugin_cheri_meminfo.in_mem_cb = true;
+    qemu_plugin_cheri_meminfo.auth_valid = false;
     qemu_plugin_cheri_meminfo.xfer_valid = false;
     if (arr == NULL) {
         return;

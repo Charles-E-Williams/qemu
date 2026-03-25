@@ -89,7 +89,7 @@ static void plugin_exit(qemu_plugin_id_t id, void *p)
 static void vcpu_mem(unsigned int cpu_index, qemu_plugin_meminfo_t meminfo,
                      uint64_t vaddr, void *udata)
 {
-    struct qemu_plugin_cheri_auth auth;
+    struct qemu_plugin_cheri_auth auth = { 0 };
 
     if (do_haddr) {
         struct qemu_plugin_hwaddr *hwaddr;
@@ -114,13 +114,14 @@ static void vcpu_mem(unsigned int cpu_index, qemu_plugin_meminfo_t meminfo,
                     auth.is_ddc ? "DDC" : "c", auth.regnum, auth.tag,
                     auth.perms, auth.base, auth.length, auth.offset);
         }
-        struct qemu_plugin_cheri_transfer mem_cap;
-        if (qemu_plugin_mem_get_cap(meminfo, &mem_cap)) {
+        struct qemu_plugin_cheri_transfer transferred_cap = { 0 };
+        if (qemu_plugin_mem_get_cap(meminfo, &transferred_cap)) {
             fprintf(out_fp,
                     " cap_tag=%u cap_perms=0x%x cap_base=0x%" PRIx64
                     " cap_len=0x%" PRIx64 " cap_off=0x%" PRIx64,
-                    mem_cap.tag, mem_cap.perms, mem_cap.base,
-                    mem_cap.length, mem_cap.offset);
+                    transferred_cap.tag, transferred_cap.perms,
+                    transferred_cap.base, transferred_cap.length,
+                    transferred_cap.offset);
         }
         fputc('\n', out_fp);
     }
