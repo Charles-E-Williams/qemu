@@ -182,6 +182,12 @@ qemu_plugin_vcpu_syscall(CPUState *cpu, int64_t num, uint64_t a1,
 void qemu_plugin_vcpu_syscall_ret(CPUState *cpu, int64_t num, int64_t ret);
 
 void qemu_plugin_vcpu_mem_cb(CPUState *cpu, uint64_t vaddr, uint32_t meminfo);
+void qemu_plugin_vcpu_set_cheri_mem_auth(CPUState *cpu, uint32_t regnum,
+                                         bool is_ddc,
+                                         uint8_t tag, uint32_t perms,
+                                         uint64_t base, uint64_t length,
+                                         uint64_t offset);
+void qemu_plugin_vcpu_clear_cheri_mem_auth(CPUState *cpu);
 
 void qemu_plugin_flush_cb(void);
 
@@ -235,7 +241,20 @@ void qemu_plugin_vcpu_syscall_ret(CPUState *cpu, int64_t num, int64_t ret)
 { }
 
 static inline void qemu_plugin_vcpu_mem_cb(CPUState *cpu, uint64_t vaddr,
-                                           uint32_t meminfo)
+                                            uint32_t meminfo)
+{ }
+
+static inline void qemu_plugin_vcpu_set_cheri_mem_auth(CPUState *cpu,
+                                                        uint32_t regnum,
+                                                        bool is_ddc,
+                                                        uint8_t tag,
+                                                        uint32_t perms,
+                                                        uint64_t base,
+                                                        uint64_t length,
+                                                        uint64_t offset)
+{ }
+
+static inline void qemu_plugin_vcpu_clear_cheri_mem_auth(CPUState *cpu)
 { }
 
 static inline void qemu_plugin_flush_cb(void)

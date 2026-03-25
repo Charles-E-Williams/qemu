@@ -47,6 +47,7 @@
 #include "tcg/tcg.h"
 #include "tcg/tcg-op.h"
 #include "qapi/error.h"
+#include "qemu/plugin.h"
 
 /*
  * CHERI common instruction logging.
@@ -1932,6 +1933,7 @@ void qemu_log_instr_drop(CPUArchState *env)
     log_assert(cpulog != NULL && "Invalid log state");
 
     cpulog->force_drop = true;
+    qemu_plugin_vcpu_clear_cheri_mem_auth(env_cpu(env));
 }
 
 void qemu_log_instr_commit(CPUArchState *env)
@@ -1946,6 +1948,7 @@ void qemu_log_instr_commit(CPUArchState *env)
     /* commit may have advanced to the next iinfo buffer slot */
     iinfo = get_cpu_log_instr_info(env);
     reset_log_buffer(cpulog, iinfo);
+    qemu_plugin_vcpu_clear_cheri_mem_auth(env_cpu(env));
 }
 
 void qemu_log_instr_reg(CPUArchState *env, const char *reg_name, target_ulong value)
@@ -2039,6 +2042,13 @@ void qemu_log_instr_mem_auth_cap(CPUArchState *env,
     iinfo->has_auth_cap = true;
     iinfo->auth_cap = *auth;
     iinfo->auth_cap_regnum = regnum;
+    qemu_plugin_vcpu_set_cheri_mem_auth(env_cpu(env), regnum,
+                                        regnum == CHERI_EXC_REGNUM_DDC,
+                                        auth->cr_tag,
+                                        cap_get_perms(auth),
+                                        cap_get_base(auth),
+                                        cap_get_length64(auth),
+                                        cap_get_offset(auth));
 }
 #endif
 

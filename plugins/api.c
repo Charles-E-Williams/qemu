@@ -260,6 +260,29 @@ bool qemu_plugin_mem_is_store(qemu_plugin_meminfo_t info)
     return !!(info & TRACE_MEM_ST);
 }
 
+bool qemu_plugin_mem_get_cheri_auth(qemu_plugin_meminfo_t info,
+                                    struct qemu_plugin_cheri_auth *auth)
+{
+    CPUState *cpu = current_cpu;
+    (void)info;
+
+    if (!auth || !cpu) {
+        return false;
+    }
+    if (!cpu->plugin_cheri_auth.valid) {
+        return false;
+    }
+
+    auth->regnum = cpu->plugin_cheri_auth.regnum;
+    auth->is_ddc = cpu->plugin_cheri_auth.is_ddc;
+    auth->tag = cpu->plugin_cheri_auth.tag;
+    auth->perms = cpu->plugin_cheri_auth.perms;
+    auth->base = cpu->plugin_cheri_auth.base;
+    auth->length = cpu->plugin_cheri_auth.length;
+    auth->offset = cpu->plugin_cheri_auth.offset;
+    return true;
+}
+
 /*
  * Virtual Memory queries
  */

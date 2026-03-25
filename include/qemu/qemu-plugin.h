@@ -404,6 +404,29 @@ typedef uint32_t qemu_plugin_meminfo_t;
 struct qemu_plugin_hwaddr;
 
 /**
+ * struct qemu_plugin_cheri_auth - CHERI memory authorization metadata
+ *
+ * Metadata describing the capability used to authorize the current
+ * memory operation. This is not itself a memory access.
+ */
+struct qemu_plugin_cheri_auth {
+    /** register number of authorizing capability, or special DDC number */
+    uint32_t regnum;
+    /** true when the source is DDC */
+    bool is_ddc;
+    /** tag bit of authorizing capability */
+    uint8_t tag;
+    /** permissions mask of authorizing capability */
+    uint32_t perms;
+    /** base of authorizing capability */
+    uint64_t base;
+    /** length of authorizing capability */
+    uint64_t length;
+    /** current offset of authorizing capability */
+    uint64_t offset;
+};
+
+/**
  * qemu_plugin_mem_size_shift() - get size of access
  * @info: opaque memory transaction handle
  *
@@ -431,6 +454,17 @@ bool qemu_plugin_mem_is_big_endian(qemu_plugin_meminfo_t info);
  * Returns: true if it was, otherwise false
  */
 bool qemu_plugin_mem_is_store(qemu_plugin_meminfo_t info);
+
+/**
+ * qemu_plugin_mem_get_cheri_auth() - get CHERI auth capability metadata
+ * @info: opaque memory transaction handle
+ * @auth: output structure populated on success
+ *
+ * Returns: true when CHERI auth metadata is available for the current
+ * memory callback, false otherwise.
+ */
+bool qemu_plugin_mem_get_cheri_auth(qemu_plugin_meminfo_t info,
+                                    struct qemu_plugin_cheri_auth *auth);
 
 /**
  * qemu_plugin_get_hwaddr() - return handle for memory operation

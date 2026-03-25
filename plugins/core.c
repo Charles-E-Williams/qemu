@@ -495,6 +495,27 @@ void qemu_plugin_vcpu_mem_cb(CPUState *cpu, uint64_t vaddr, uint32_t info)
     }
 }
 
+void qemu_plugin_vcpu_set_cheri_mem_auth(CPUState *cpu, uint32_t regnum,
+                                         bool is_ddc,
+                                         uint8_t tag, uint32_t perms,
+                                         uint64_t base, uint64_t length,
+                                         uint64_t offset)
+{
+    cpu->plugin_cheri_auth.valid = true;
+    cpu->plugin_cheri_auth.regnum = regnum;
+    cpu->plugin_cheri_auth.is_ddc = is_ddc;
+    cpu->plugin_cheri_auth.tag = tag;
+    cpu->plugin_cheri_auth.perms = perms;
+    cpu->plugin_cheri_auth.base = base;
+    cpu->plugin_cheri_auth.length = length;
+    cpu->plugin_cheri_auth.offset = offset;
+}
+
+void qemu_plugin_vcpu_clear_cheri_mem_auth(CPUState *cpu)
+{
+    cpu->plugin_cheri_auth.valid = false;
+}
+
 void qemu_plugin_atexit_cb(void)
 {
     plugin_cb__udata(QEMU_PLUGIN_EV_ATEXIT);
