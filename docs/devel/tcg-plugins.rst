@@ -68,6 +68,15 @@ API
 
 .. kernel-doc:: include/qemu/qemu-plugin.h
 
+CHERI memory authorization metadata
+-----------------------------------
+
+When built with CHERI support, memory callbacks can query additional
+authorization metadata using ``qemu_plugin_mem_get_cheri_auth()``.
+The returned structure describes the capability used to authorize the
+memory load/store (including whether the source is a capability register
+or DDC). This metadata is not itself a memory access.
+
 Usage
 =====
 
