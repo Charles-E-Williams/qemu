@@ -32,7 +32,6 @@ static enum qemu_plugin_mem_rw rw = QEMU_PLUGIN_MEM_RW;
 static void plugin_exit(qemu_plugin_id_t id, void *p)
 {
     g_autoptr(GString) out = g_string_new("");
-    int status = 0;
     g_autoptr(GError) err = NULL;
 
     if (do_inline) {
@@ -47,24 +46,39 @@ static void plugin_exit(qemu_plugin_id_t id, void *p)
     qemu_plugin_outs(out->str);
 
     if (out_fp) {
-        if (fflush(out_fp) != 0 || fclose(out_fp) != 0) {
-            g_autofree gchar *msg = g_strdup_printf("failed to flush/close output '%s': %s\n",
-                                                    out_path ? out_path : "(null)",
-                                                    g_strerror(errno));
+        int flush_errno = 0;
+        int close_errno = 0;
+
+        if (fflush(out_fp) != 0) {
+            flush_errno = errno;
+        }
+        if (fclose(out_fp) != 0) {
+            close_errno = errno;
+        }
+        if (flush_errno || close_errno) {
+            g_autofree gchar *msg = g_strdup_printf(
+                "failed to flush/close output '%s': flush=%s close=%s\n",
+                out_path ? out_path : "(null)",
+                flush_errno ? g_strerror(flush_errno) : "ok",
+                close_errno ? g_strerror(close_errno) : "ok");
             qemu_plugin_outs(msg);
         }
         out_fp = NULL;
     }
     if (do_xz && out_path) {
+        int status = 0;
         const gchar *argv[] = { "xz", "-f", "-z", out_path, NULL };
         if (!g_spawn_sync(NULL, (gchar **)argv, NULL, G_SPAWN_SEARCH_PATH,
                           NULL, NULL, NULL, NULL, &status, &err)) {
             g_autofree gchar *msg = g_strdup_printf("xz compression failed: %s\n",
                                                     err ? err->message : "unknown");
             qemu_plugin_outs(msg);
-        } else if (status != 0) {
-            g_autofree gchar *msg = g_strdup_printf("xz exited with status %d\n",
-                                                    WEXITSTATUS(status));
+        } else if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+            g_autofree gchar *msg = g_strdup_printf(
+                "xz failed (status=0x%x, exit=%d, signal=%d)\n",
+                status,
+                WIFEXITED(status) ? WEXITSTATUS(status) : -1,
+                WIFSIGNALED(status) ? WTERMSIG(status) : -1);
             qemu_plugin_outs(msg);
         }
     }
