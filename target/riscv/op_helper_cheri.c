@@ -41,6 +41,7 @@
 #include "exec/exec-all.h"
 #include "exec/log.h"
 #include "exec/helper-proto.h"
+#include "qemu/plugin.h"
 #include "cheri-helper-utils.h"
 #include "cheri_tagmem.h"
 #ifndef TARGET_CHERI
@@ -471,4 +472,33 @@ target_ulong HELPER(sc_c_cap)(CPUArchState *env, uint32_t addr_reg,
 {
     target_ulong addr = get_capreg_cursor(env, addr_reg);
     return sc_c_impl(env, addr_reg, val_reg, addr, GETPC());
+}
+void HELPER(plugin_set_mem_auth_capreg)(CPUArchState *env, uint32_t authreg)
+{
+#ifdef CONFIG_PLUGIN
+    const cap_register_t *auth = get_load_store_base_cap(env, authreg);
+
+    qemu_plugin_vcpu_cheri_set_auth(env_cpu(env), authreg,
+                                    authreg == CHERI_EXC_REGNUM_DDC,
+                                    auth->cr_tag, cap_get_perms(auth),
+                                    cap_get_base(auth), cap_get_length64(auth),
+                                    cap_get_offset(auth));
+#else
+    (void)env;
+    (void)authreg;
+#endif
+}
+
+void HELPER(plugin_set_mem_auth_ddc)(CPUArchState *env)
+{
+#ifdef CONFIG_PLUGIN
+    const cap_register_t *ddc = cheri_get_ddc(env);
+
+    qemu_plugin_vcpu_cheri_set_auth(env_cpu(env), CHERI_EXC_REGNUM_DDC, true,
+                                    ddc->cr_tag, cap_get_perms(ddc),
+                                    cap_get_base(ddc), cap_get_length64(ddc),
+                                    cap_get_offset(ddc));
+#else
+    (void)env;
+#endif
 }

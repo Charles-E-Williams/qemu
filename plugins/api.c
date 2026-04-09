@@ -260,6 +260,49 @@ bool qemu_plugin_mem_is_store(qemu_plugin_meminfo_t info)
     return !!(info & TRACE_MEM_ST);
 }
 
+bool qemu_plugin_get_auth_cap(qemu_plugin_meminfo_t info,
+                              struct qemu_plugin_cheri_auth *auth)
+{
+    if (!auth) {
+        return false;
+    }
+    if (!qemu_plugin_cheri_meminfo.valid ||
+        !qemu_plugin_cheri_meminfo.in_mem_cb ||
+        qemu_plugin_cheri_meminfo.meminfo != info ||
+        !qemu_plugin_cheri_meminfo.auth_valid) {
+        return false;
+    }
+    auth->regnum = qemu_plugin_cheri_meminfo.auth_regnum;
+    auth->is_ddc = qemu_plugin_cheri_meminfo.auth_is_ddc;
+    auth->tag = qemu_plugin_cheri_meminfo.auth_tag;
+    auth->perms = qemu_plugin_cheri_meminfo.auth_perms;
+    auth->base = qemu_plugin_cheri_meminfo.auth_base;
+    auth->length = qemu_plugin_cheri_meminfo.auth_length;
+    auth->offset = qemu_plugin_cheri_meminfo.auth_offset;
+    return true;
+}
+
+bool qemu_plugin_mem_get_cap(qemu_plugin_meminfo_t info,
+                             struct qemu_plugin_cheri_transfer *xfer)
+{
+    if (!xfer) {
+        return false;
+    }
+    if (!qemu_plugin_cheri_meminfo.valid ||
+        !qemu_plugin_cheri_meminfo.in_mem_cb ||
+        qemu_plugin_cheri_meminfo.meminfo != info ||
+        !qemu_plugin_cheri_meminfo.xfer_valid) {
+        return false;
+    }
+    xfer->is_store = qemu_plugin_cheri_meminfo.xfer_is_store;
+    xfer->tag = qemu_plugin_cheri_meminfo.xfer_tag;
+    xfer->perms = qemu_plugin_cheri_meminfo.xfer_perms;
+    xfer->base = qemu_plugin_cheri_meminfo.xfer_base;
+    xfer->length = qemu_plugin_cheri_meminfo.xfer_length;
+    xfer->offset = qemu_plugin_cheri_meminfo.xfer_offset;
+    return true;
+}
+
 /*
  * Virtual Memory queries
  */

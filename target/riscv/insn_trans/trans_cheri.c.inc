@@ -518,6 +518,7 @@ static bool gen_ddc_load(DisasContext *ctx, int rd, int rs1, MemOp memop)
     TCGv addr = tcg_temp_new();
     TCGv value = tcg_temp_new();
     gen_get_gpr(addr, rs1);
+    generate_plugin_set_mem_auth_ddc();
     gen_ddc_interposed_ld_tl(ctx, value, /* Update addr in-place */ NULL, addr,
                              ctx->mem_idx, memop);
     gen_set_gpr(rd, value);
@@ -533,6 +534,7 @@ static inline bool gen_cap_load_mem_idx(DisasContext *ctx, int32_t rd,
     // FIXME: just do everything in the helper
     TCGv value = tcg_temp_new();
     TCGv_cap_checked_ptr vaddr = tcg_temp_new_cap_checked();
+    generate_plugin_set_mem_auth_capreg(cs);
     generate_cap_load_check_imm(vaddr, cs, offset, op);
     tcg_gen_qemu_ld_tl_with_checked_addr(value, vaddr, mem_idx, op);
     gen_set_gpr(rd, value);
@@ -642,6 +644,7 @@ static bool gen_ddc_store(DisasContext *ctx, int rs1, int rs2, MemOp memop)
     TCGv value = tcg_temp_new();
     gen_get_gpr(addr, rs1);
     gen_get_gpr(value, rs2);
+    generate_plugin_set_mem_auth_ddc();
     gen_ddc_interposed_st_tl(ctx, value, /* Update addr in-place */ NULL, addr,
                              ctx->mem_idx, memop);
     tcg_temp_free(value);
@@ -656,6 +659,7 @@ static inline bool gen_cap_store_mem_idx(DisasContext *ctx, int32_t addr_regnum,
 {
     // FIXME: just do everything in the helper
     TCGv_cap_checked_ptr vaddr = tcg_temp_new_cap_checked();
+    generate_plugin_set_mem_auth_capreg(addr_regnum);
     generate_cap_store_check_imm(vaddr, addr_regnum, offset, op);
 
     TCGv value = tcg_temp_new();
@@ -904,6 +908,7 @@ static inline bool gen_lr_impl(DisasContext *ctx, TCGv_cap_checked_ptr addr,
         tcg_temp_free_i32(type_gpr_d);                                         \
                                                                                \
         TCGv_cap_checked_ptr addr = tcg_temp_new_cap_checked();                \
+        generate_plugin_set_mem_auth_ddc();                                    \
         generate_get_ddc_checked_gpr_plus_offset(                              \
             addr, ctx, a->rs1, 0, op, &generate_ddc_checked_load_ptr);         \
         bool result = gen_lr_impl(ctx, addr, a, op);                           \
@@ -929,6 +934,7 @@ static inline bool gen_lr_impl(DisasContext *ctx, TCGv_cap_checked_ptr addr,
         tcg_temp_free_i32(type_gpr);                                           \
                                                                                \
         TCGv_cap_checked_ptr addr = tcg_temp_new_cap_checked();                \
+        generate_plugin_set_mem_auth_capreg(a->rs1);                           \
         generate_cap_load_check_imm(addr, a->rs1, 0, op);                      \
         bool result = gen_lr_impl(ctx, addr, a, op);                           \
         tcg_temp_free_cap_checked(addr);                                       \
@@ -970,6 +976,7 @@ static inline bool gen_sc_impl(DisasContext *ctx, TCGv_cap_checked_ptr addr,
         tcg_temp_free_i32(type_gpr_d);                                         \
                                                                                \
         TCGv_cap_checked_ptr addr = tcg_temp_new_cap_checked();                \
+        generate_plugin_set_mem_auth_ddc();                                    \
         generate_get_ddc_checked_gpr_plus_offset(                              \
             addr, ctx, a->rs1, 0, op, &generate_ddc_checked_load_ptr);         \
         a->rd = a->rs2; /* Not enough encoding space for explicit rd */        \
@@ -1004,6 +1011,7 @@ static inline bool gen_sc_impl(DisasContext *ctx, TCGv_cap_checked_ptr addr,
         tcg_temp_free_i32(type_gpr_d);                                         \
                                                                                \
         TCGv_cap_checked_ptr addr = tcg_temp_new_cap_checked();                \
+        generate_plugin_set_mem_auth_capreg(a->rs1);                           \
         generate_cap_load_check_imm(addr, a->rs1, 0, op);                      \
         a->rd = a->rs2; /* Not enough encoding space for explicit rd */        \
         bool result = gen_sc_impl(ctx, addr, a, op);                           \

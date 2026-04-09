@@ -41,6 +41,7 @@
 #include "exec/exec-all.h"
 #include "exec/helper-proto.h"
 #include "exec/memop.h"
+#include "qemu/plugin.h"
 
 #include "cheri-helper-utils.h"
 #include "cheri_tagmem.h"
@@ -1537,6 +1538,15 @@ void load_cap_from_memory(CPUArchState *env, uint32_t cd, uint32_t cb,
     target_ulong cursor;
     bool tag = load_cap_from_memory_raw(env, &pesbt, &cursor, cb, source, vaddr,
                                         retpc, physaddr);
+#if defined(TARGET_RISCV) && defined(CONFIG_PLUGIN)
+    cap_register_t loaded_cap;
+    CAP_cc(decompress_raw)(pesbt, cursor, tag, &loaded_cap);
+    qemu_plugin_vcpu_cheri_set_mem_cap(env_cpu(env), false, tag,
+                                       cap_get_perms(&loaded_cap),
+                                       cap_get_base(&loaded_cap),
+                                       cap_get_length64(&loaded_cap),
+                                       cap_get_offset(&loaded_cap));
+#endif
     update_compressed_capreg(env, cd, pesbt, tag, cursor);
 }
 
@@ -1552,6 +1562,16 @@ void store_cap_to_memory_mmu_index(CPUArchState *env, uint32_t cs,
     }
 #endif
     bool tag = get_capreg_tag_filtered(env, cs);
+#if defined(TARGET_RISCV) && defined(CONFIG_PLUGIN)
+    const target_ulong pesbt = pesbt_for_mem ^ CAP_NULL_XOR_MASK;
+    cap_register_t stored_cap;
+    CAP_cc(decompress_raw)(pesbt, cursor, tag, &stored_cap);
+    qemu_plugin_vcpu_cheri_set_mem_cap(env_cpu(env), true, tag,
+                                       cap_get_perms(&stored_cap),
+                                       cap_get_base(&stored_cap),
+                                       cap_get_length64(&stored_cap),
+                                       cap_get_offset(&stored_cap));
+#endif
     if (cs == NULL_CAPREG_INDEX) {
         tcg_debug_assert(pesbt_for_mem == 0 && "Wrong value for cnull?");
         tcg_debug_assert(cursor == 0 && "Wrong value for cnull?");

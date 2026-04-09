@@ -50,7 +50,7 @@ typedef uint64_t qemu_plugin_id_t;
 
 extern QEMU_PLUGIN_EXPORT int qemu_plugin_version;
 
-#define QEMU_PLUGIN_VERSION 1
+#define QEMU_PLUGIN_VERSION 2
 
 /**
  * struct qemu_info_t - system information for plugins
@@ -404,6 +404,50 @@ typedef uint32_t qemu_plugin_meminfo_t;
 struct qemu_plugin_hwaddr;
 
 /**
+ * struct qemu_plugin_cheri_auth - CHERI memory authorization metadata
+ *
+ * Metadata describing the capability used to authorize the current
+ * memory operation. This is not itself a memory access.
+ */
+struct qemu_plugin_cheri_auth {
+    /** register number of authorizing capability, or CHERI_EXC_REGNUM_DDC */
+    uint32_t regnum;
+    /** true when the source is DDC */
+    bool is_ddc;
+    /** tag bit of authorizing capability */
+    uint8_t tag;
+    /** permissions mask of authorizing capability */
+    uint32_t perms;
+    /** base of authorizing capability */
+    uint64_t base;
+    /** length of authorizing capability */
+    uint64_t length;
+    /** current offset of authorizing capability */
+    uint64_t offset;
+};
+
+/**
+ * struct qemu_plugin_cheri_transfer - CHERI transferred capability metadata
+ *
+ * Metadata for the capability value transferred by the current memory operation
+ * (capability load or store). This is present only for capability transfers.
+ */
+struct qemu_plugin_cheri_transfer {
+    /** true when this memory callback corresponds to a capability store */
+    bool is_store;
+    /** tag bit of transferred capability */
+    uint8_t tag;
+    /** permissions mask of transferred capability */
+    uint32_t perms;
+    /** base of transferred capability */
+    uint64_t base;
+    /** length of transferred capability */
+    uint64_t length;
+    /** current offset of transferred capability */
+    uint64_t offset;
+};
+
+/**
  * qemu_plugin_mem_size_shift() - get size of access
  * @info: opaque memory transaction handle
  *
@@ -431,6 +475,28 @@ bool qemu_plugin_mem_is_big_endian(qemu_plugin_meminfo_t info);
  * Returns: true if it was, otherwise false
  */
 bool qemu_plugin_mem_is_store(qemu_plugin_meminfo_t info);
+
+/**
+ * qemu_plugin_get_auth_cap() - get CHERI auth capability metadata
+ * @info: opaque memory transaction handle
+ * @auth: output structure populated on success
+ *
+ * Returns: true when CHERI auth metadata is available for the current
+ * memory callback, false otherwise.
+ */
+bool qemu_plugin_get_auth_cap(qemu_plugin_meminfo_t info,
+                              struct qemu_plugin_cheri_auth *auth);
+
+/**
+ * qemu_plugin_mem_get_cap() - get transferred capability metadata
+ * @info: opaque memory transaction handle
+ * @xfer: output structure populated on success
+ *
+ * Returns: true when transferred capability metadata is available for the
+ * current memory callback, false otherwise.
+ */
+bool qemu_plugin_mem_get_cap(qemu_plugin_meminfo_t info,
+                             struct qemu_plugin_cheri_transfer *xfer);
 
 /**
  * qemu_plugin_get_hwaddr() - return handle for memory operation
