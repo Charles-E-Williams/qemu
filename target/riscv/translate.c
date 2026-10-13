@@ -779,6 +779,142 @@ static uint32_t opcode_at(DisasContextBase *dcbase, target_ulong pc)
     return cpu_ldl_code(env, pc);
 }
 
+#ifdef TARGET_CHERI
+/*
+ * Inline fast path for capability-relative load/store checks.
+ *
+ * The common case (authorising capability already fully decompressed,
+ * tagged, unsealed, with the required permissions and the access in bounds)
+ * is checked with a handful of inline TCG ops. Anything else -- including
+ * every case that would raise an exception, lazily decompress the register
+ * or need the 65-bit end-of-address-space comparison -- falls back to the
+ * existing helper, which redoes the full check with the usual exception
+ * priorities. Logging TBs always use the helper so that the authorising
+ * capability is still recorded in the trace.
+ *
+ * The checked address is cursor + offset whichever path is taken (the helper
+ * returns exactly that on success), so it is recomputed after the join
+ * instead of being kept live across the branch. @result can therefore be an
+ * ordinary temp and nothing has to be spilled to memory on the fast path.
+ */
+typedef void (*gen_cap_check_slow_fn)(TCGv_cap_checked_ptr, uint32_t,
+                                      target_long, MemOp);
+
+/* cr_tag .. cr_extra are four consecutive bytes; load them as one word. */
+QEMU_BUILD_BUG_ON(offsetof(cap_register_t, cr_extra) !=
+                  offsetof(cap_register_t, cr_tag) + 3);
+#ifdef HOST_WORDS_BIGENDIAN
+#define CAP_TAG_STATE_SHIFT(byte) (8 * (3 - (byte)))
+#else
+#define CAP_TAG_STATE_SHIFT(byte) (8 * (byte))
+#endif
+/* _cr_top is a double-width integer: low and high target_ulong halves. */
+QEMU_BUILD_BUG_ON(sizeof(((cap_register_t *)0)->_cr_top) !=
+                  2 * sizeof(target_ulong));
+#ifdef HOST_WORDS_BIGENDIAN
+#define CAP_TOP_LO_OFFSET                                                      \
+    (offsetof(cap_register_t, _cr_top) + sizeof(target_ulong))
+#define CAP_TOP_HI_OFFSET offsetof(cap_register_t, _cr_top)
+#else
+#define CAP_TOP_LO_OFFSET offsetof(cap_register_t, _cr_top)
+#define CAP_TOP_HI_OFFSET                                                      \
+    (offsetof(cap_register_t, _cr_top) + sizeof(target_ulong))
+#endif
+#define CAP_TAG_STATE_MASK                                                     \
+    ((0xffu << CAP_TAG_STATE_SHIFT(0)) | (0xffu << CAP_TAG_STATE_SHIFT(3)))
+#define CAP_TAG_STATE_WANT                                                     \
+    ((1u << CAP_TAG_STATE_SHIFT(0)) |                                          \
+     ((uint32_t)CREG_FULLY_DECOMPRESSED << CAP_TAG_STATE_SHIFT(3)))
+
+static void gen_cap_check_fast(DisasContext *ctx, TCGv_cap_checked_ptr result,
+                               uint32_t cb, target_long offset, MemOp mop,
+                               uint32_t perms, gen_cap_check_slow_fn slow)
+{
+    const uint32_t creg = gp_register_offset(cb);
+    const uint32_t size = memop_size(mop);
+    const target_ulong pesbt_mask =
+        CAP_CC(FIELD_OTYPE_MASK64) |
+        ((target_ulong)perms << CAP_CC(FIELD_HWPERMS_START));
+    const target_ulong pesbt_want =
+        ((target_ulong)CAP_OTYPE_UNSEALED << CAP_CC(FIELD_OTYPE_START)) |
+        ((target_ulong)perms << CAP_CC(FIELD_HWPERMS_START));
+    TCGv addr, ok, t, t2;
+    TCGLabel *done;
+
+#ifdef CONFIG_TCG_LOG_INSTR
+    if (unlikely(ctx->base.log_instr_enabled)) {
+        slow(result, cb, offset, mop);
+        return;
+    }
+#endif
+    if (cb == 0) {
+        slow(result, cb, offset, mop);
+        return;
+    }
+
+    addr = tcg_temp_new();
+    ok = tcg_temp_new();
+    t = tcg_temp_new();
+    t2 = tcg_temp_new();
+    done = gen_new_label();
+
+    _gen_get_gpr(addr, cb);
+    if (offset != 0) {
+        tcg_gen_addi_tl(addr, addr, offset);
+    }
+
+    /* Tagged and already fully decompressed */
+    tcg_gen_ld32u_tl(ok, cpu_env, creg + offsetof(cap_register_t, cr_tag));
+    tcg_gen_andi_tl(ok, ok, CAP_TAG_STATE_MASK);
+    tcg_gen_setcondi_tl(TCG_COND_EQ, ok, ok, CAP_TAG_STATE_WANT);
+
+    /* Unsealed and has the required hardware permissions */
+    tcg_gen_ld_tl(t, cpu_env, creg + offsetof(cap_register_t, cr_pesbt));
+    tcg_gen_andi_tl(t, t, pesbt_mask);
+    tcg_gen_setcondi_tl(TCG_COND_EQ, t, t, pesbt_want);
+    tcg_gen_and_tl(ok, ok, t);
+
+    /* base <= addr */
+    tcg_gen_ld_tl(t, cpu_env, creg + offsetof(cap_register_t, cr_base));
+    tcg_gen_setcond_tl(TCG_COND_LEU, t, t, addr);
+    tcg_gen_and_tl(ok, ok, t);
+
+    /*
+     * end = addr + size must not wrap (accesses ending exactly at 2^64 go
+     * to the helper), and end <= top. top is 65 bits wide; a non-zero high
+     * half means top == 2^64, which bounds every non-wrapping access.
+     */
+    tcg_gen_addi_tl(t2, addr, size);
+    tcg_gen_setcond_tl(TCG_COND_GTU, t, t2, addr);
+    tcg_gen_and_tl(ok, ok, t);
+    tcg_gen_ld_tl(t, cpu_env, creg + CAP_TOP_LO_OFFSET);
+    tcg_gen_setcond_tl(TCG_COND_LEU, t2, t2, t);
+    tcg_gen_ld_tl(t, cpu_env, creg + CAP_TOP_HI_OFFSET);
+    tcg_gen_or_tl(t2, t2, t);   /* t2 != 0 iff end <= top */
+    tcg_gen_setcondi_tl(TCG_COND_NE, t2, t2, 0);
+    tcg_gen_and_tl(ok, ok, t2);
+
+    tcg_gen_brcondi_tl(TCG_COND_NE, ok, 0, done);
+    tcg_temp_free(addr);
+    tcg_temp_free(ok);
+    tcg_temp_free(t);
+    tcg_temp_free(t2);
+
+    /*
+     * Slow path: full check in the helper, which raises the architecturally
+     * correct exception (or lazily decompresses and succeeds).
+     */
+    slow(result, cb, offset, mop);
+
+    gen_set_label(done);
+    /* Both paths: checked address = cursor + offset */
+    _gen_get_gpr((TCGv)result, cb);
+    if (offset != 0) {
+        tcg_gen_addi_tl((TCGv)result, (TCGv)result, offset);
+    }
+}
+#endif
+
 /* Include insn module translation function */
 #ifdef TARGET_CHERI
 /* Must be included first since the helpers are used by trans_rvi.c.inc */
@@ -817,6 +953,7 @@ static inline TCGv_cap_checked_ptr _get_capmode_dependent_addr(
 #ifdef TARGET_CHERI
     void (*gen_check_cap)(TCGv_cap_checked_ptr, uint32_t, target_long, MemOp),
     void (*check_ddc)(TCGv_cap_checked_ptr, DisasContext *, TCGv, target_ulong),
+    uint32_t perms,
 #endif
     MemOp mop)
 
@@ -824,7 +961,8 @@ static inline TCGv_cap_checked_ptr _get_capmode_dependent_addr(
     TCGv_cap_checked_ptr result = tcg_temp_new_cap_checked();
 #ifdef TARGET_CHERI
     if (ctx->capmode) {
-        gen_check_cap(result, reg_num, regoffs, mop);
+        gen_cap_check_fast(ctx, result, reg_num, regoffs, mop, perms,
+                           gen_check_cap);
     } else {
         generate_get_ddc_checked_gpr_plus_offset(result, ctx, reg_num, regoffs,
                                                  mop, check_ddc);
@@ -846,6 +984,7 @@ get_capmode_dependent_load_addr(DisasContext *ctx, int reg_num,
 #ifdef TARGET_CHERI
                                        &generate_cap_load_check_imm,
                                        &generate_ddc_checked_load_ptr,
+                                       CAP_PERM_LOAD,
 #endif
                                        mop);
 }
@@ -858,6 +997,7 @@ get_capmode_dependent_store_addr(DisasContext *ctx, int reg_num,
 #ifdef TARGET_CHERI
                                        &generate_cap_store_check_imm,
                                        &generate_ddc_checked_store_ptr,
+                                       CAP_PERM_STORE,
 #endif
                                        mop);
 }
@@ -870,6 +1010,7 @@ get_capmode_dependent_rmw_addr(DisasContext *ctx, int reg_num,
 #ifdef TARGET_CHERI
                                        &generate_cap_rmw_check_imm,
                                        &generate_ddc_checked_rmw_ptr,
+                                       CAP_PERM_LOAD | CAP_PERM_STORE,
 #endif
                                        mop);
 }

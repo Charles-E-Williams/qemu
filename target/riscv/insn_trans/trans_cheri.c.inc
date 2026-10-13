@@ -363,7 +363,6 @@ static bool trans_cspecialrw(DisasContext *ctx, arg_cspecialrw *a)
 // Three operand (cap cap int)
 TRANSLATE_CAP_CAP_INT(candperm)
 TRANSLATE_CAP_CAP_INT(cfromptr)
-TRANSLATE_CAP_CAP_INT(cincoffset)
 TRANSLATE_CAP_CAP_INT(csetaddr)
 TRANSLATE_CAP_CAP_INT(csetbounds)
 TRANSLATE_CAP_CAP_INT(csetboundsexact)
@@ -407,9 +406,135 @@ static inline bool gen_cheri_cap_cap_imm(int cd, int cs1, target_long imm,
 #define TRANSLATE_CAP_CAP_IMM(name)                                            \
     TRANSLATE_MAYBE_TRAP(name, gen_cheri_cap_cap_imm, a->rd, a->rs1, a->imm)
 
+/*
+ * CIncOffset / CIncOffsetImm.
+ *
+ * Purecap code does this for nearly every pointer adjustment (stack frames,
+ * array walks), so the common case is done inline: source capability fully
+ * decompressed, tagged, unsealed and the new address still inside its
+ * bounds. That is exactly the case in which try_set_cap_cursor() just copies
+ * the capability and replaces the cursor. Everything else (untagged, sealed,
+ * out of bounds and possibly unrepresentable, lazily-decompressed source, or
+ * a logging TB) goes through the helper as before.
+ *
+ * @rs2 < 0 selects the immediate form.
+ */
+static void gen_cincoffset_slow(int cd, int cs1, int rs2, target_long imm)
+{
+    if (rs2 < 0) {
+        gen_cheri_cap_cap_imm(cd, cs1, imm, &gen_helper_cincoffset);
+    } else {
+        gen_cheri_cap_cap_int_plus_imm(cd, cs1, rs2, 0, &gen_helper_cincoffset);
+    }
+}
+
+static void gen_cincoffset_new_addr(TCGv dst, int cs1, int rs2,
+                                    target_long imm)
+{
+    _gen_get_gpr(dst, cs1);
+    if (rs2 < 0) {
+        if (imm != 0) {
+            tcg_gen_addi_tl(dst, dst, imm);
+        }
+    } else if (rs2 != 0) {
+        TCGv inc = tcg_temp_new();
+        _gen_get_gpr(inc, rs2);
+        tcg_gen_add_tl(dst, dst, inc);
+        tcg_temp_free(inc);
+    }
+}
+
+static bool gen_cincoffset(DisasContext *ctx, int cd, int cs1, int rs2,
+                           target_long imm)
+{
+    const uint32_t src = gp_register_offset(cs1);
+    const uint32_t dst = gp_register_offset(cd);
+    TCGv addr, ok, t, t2;
+    TCGLabel *slow, *done;
+
+#ifdef CONFIG_TCG_LOG_INSTR
+    if (unlikely(ctx->base.log_instr_enabled)) {
+        gen_cincoffset_slow(cd, cs1, rs2, imm);
+        return true;
+    }
+#endif
+    if (cd == 0 || cs1 == 0) {
+        gen_cincoffset_slow(cd, cs1, rs2, imm);
+        return true;
+    }
+
+    addr = tcg_temp_new();
+    ok = tcg_temp_new();
+    t = tcg_temp_new();
+    t2 = tcg_temp_new();
+    slow = gen_new_label();
+    done = gen_new_label();
+
+    gen_cincoffset_new_addr(addr, cs1, rs2, imm);
+
+    /* Tagged and fully decompressed */
+    tcg_gen_ld32u_tl(ok, cpu_env, src + offsetof(cap_register_t, cr_tag));
+    tcg_gen_andi_tl(ok, ok, CAP_TAG_STATE_MASK);
+    tcg_gen_setcondi_tl(TCG_COND_EQ, ok, ok, CAP_TAG_STATE_WANT);
+    /* Unsealed */
+    tcg_gen_ld_tl(t, cpu_env, src + offsetof(cap_register_t, cr_pesbt));
+    tcg_gen_andi_tl(t, t, CAP_CC(FIELD_OTYPE_MASK64));
+    tcg_gen_setcondi_tl(TCG_COND_EQ, t, t,
+                        (target_ulong)CAP_OTYPE_UNSEALED
+                            << CAP_CC(FIELD_OTYPE_START));
+    tcg_gen_and_tl(ok, ok, t);
+    /* base <= new address */
+    tcg_gen_ld_tl(t, cpu_env, src + offsetof(cap_register_t, cr_base));
+    tcg_gen_setcond_tl(TCG_COND_LEU, t, t, addr);
+    tcg_gen_and_tl(ok, ok, t);
+    /* new address < top (65 bits: non-zero high half means top == 2^64) */
+    tcg_gen_ld_tl(t, cpu_env, src + CAP_TOP_LO_OFFSET);
+    tcg_gen_setcond_tl(TCG_COND_LTU, t, addr, t);
+    tcg_gen_ld_tl(t2, cpu_env, src + CAP_TOP_HI_OFFSET);
+    tcg_gen_or_tl(t, t, t2);
+    tcg_gen_setcondi_tl(TCG_COND_NE, t, t, 0);
+    tcg_gen_and_tl(ok, ok, t);
+
+    tcg_gen_brcondi_tl(TCG_COND_EQ, ok, 0, slow);
+    tcg_temp_free(ok);
+
+    /* Fast path: cd = cs1 with the new cursor (temps died at the branch). */
+    if (cd != cs1) {
+        static const size_t fields[] = {
+            offsetof(cap_register_t, cr_pesbt),
+            CAP_TOP_LO_OFFSET,
+            CAP_TOP_HI_OFFSET,
+            offsetof(cap_register_t, cr_base),
+        };
+        for (size_t i = 0; i < ARRAY_SIZE(fields); i++) {
+            tcg_gen_ld_tl(t, cpu_env, src + fields[i]);
+            tcg_gen_st_tl(t, cpu_env, dst + fields[i]);
+        }
+        /* cr_tag, cr_bounds_valid, cr_exp, cr_extra */
+        tcg_gen_ld32u_tl(t, cpu_env, src + offsetof(cap_register_t, cr_tag));
+        tcg_gen_st32_tl(t, cpu_env, dst + offsetof(cap_register_t, cr_tag));
+    }
+    gen_cincoffset_new_addr(addr, cs1, rs2, imm);
+    _gen_set_gpr(ctx, cd, addr, /*clear_pesbt=*/false);
+    tcg_temp_free(addr);
+    tcg_temp_free(t);
+    tcg_temp_free(t2);
+    tcg_gen_br(done);
+
+    gen_set_label(slow);
+    gen_cincoffset_slow(cd, cs1, rs2, imm);
+    gen_set_label(done);
+    return true;
+}
+
+static bool trans_cincoffset(DisasContext *ctx, arg_cincoffset *a)
+{
+    return gen_cincoffset(ctx, a->rd, a->rs1, a->rs2, 0);
+}
+
 static bool trans_cincoffsetimm(DisasContext *ctx, arg_cincoffsetimm *a)
 {
-    return gen_cheri_cap_cap_imm(a->rd, a->rs1, a->imm, &gen_helper_cincoffset);
+    return gen_cincoffset(ctx, a->rd, a->rs1, -1, a->imm);
 }
 
 static bool trans_csetboundsimm(DisasContext *ctx, arg_cincoffsetimm *a)
@@ -558,7 +683,8 @@ static inline bool gen_cap_load_mem_idx(DisasContext *ctx, int32_t rd,
     // FIXME: just do everything in the helper
     TCGv value = tcg_temp_new();
     TCGv_cap_checked_ptr vaddr = tcg_temp_new_cap_checked();
-    generate_cap_load_check_imm(vaddr, cs, offset, op);
+    gen_cap_check_fast(ctx, vaddr, cs, offset, op, CAP_PERM_LOAD,
+                       generate_cap_load_check_imm);
     tcg_gen_qemu_ld_tl_with_checked_addr(value, vaddr, mem_idx, op);
     gen_set_gpr(rd, value);
     tcg_temp_free_cap_checked(vaddr);
@@ -681,7 +807,8 @@ static inline bool gen_cap_store_mem_idx(DisasContext *ctx, int32_t addr_regnum,
 {
     // FIXME: just do everything in the helper
     TCGv_cap_checked_ptr vaddr = tcg_temp_new_cap_checked();
-    generate_cap_store_check_imm(vaddr, addr_regnum, offset, op);
+    gen_cap_check_fast(ctx, vaddr, addr_regnum, offset, op, CAP_PERM_STORE,
+                       generate_cap_store_check_imm);
 
     TCGv value = tcg_temp_new();
     gen_get_gpr(value, val_regnum);
