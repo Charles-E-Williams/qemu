@@ -98,6 +98,8 @@ static void process_interval(void)
         gzflush(bbv_file, Z_SYNC_FLUSH);
         fflush(simpoints_interval_file);
     }
+
+    fprintf(stderr, "BBV Progress: Completed Interval %"PRIu64"\n", completed_intervals);
     
     g_list_free(sorted);
     completed_intervals++;
@@ -157,6 +159,8 @@ static void tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
     uint64_t pc = qemu_plugin_tb_vaddr(tb);
     size_t n_insns = qemu_plugin_tb_n_insns(tb);
     BasicBlock *bb;
+
+
     
     if (!plugin_active) {
         return;
@@ -237,7 +241,7 @@ static void plugin_exit(qemu_plugin_id_t id, void *p)
 
 static void plugin_init(const char *name)
 {
-    char *bbv_name = g_strdup_printf("%s.bb.gz", name);
+    char *bbv_name = g_strdup_printf("%s.bbv.gz", name);
     char *interval_name = g_strdup_printf("%s.intervals.txt", name);
     
     bbv_file = gzopen(bbv_name, "w");
