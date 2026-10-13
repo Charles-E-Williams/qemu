@@ -377,9 +377,6 @@ void cheri_tag_invalidate(CPUArchState *env, target_ulong vaddr, int32_t size,
     if (likely(tag_start.value == tag_end.value)) {
         // Common case, only one tag (i.e. an aligned store)
         cheri_tag_invalidate_one(env, vaddr, size, pc, mmu_idx);
-#if defined(CONFIG_TCG_LOG_INSTR)
-        qemu_simpoint_invalidate_cap(vaddr, size);
-#endif
         return;
     }
     // Unaligned store -> can cross a capabiblity alignment boundary and
@@ -421,10 +418,6 @@ void cheri_tag_invalidate(CPUArchState *env, target_ulong vaddr, int32_t size,
         target_ulong inval_size = MIN(CHERI_CAP_SIZE, last_addr + 1 - addr);
         cheri_tag_invalidate_one(env, addr, inval_size, pc, mmu_idx);
     }
-
-#if defined(CONFIG_TCG_LOG_INSTR)
-    qemu_simpoint_invalidate_cap(vaddr, size);
-#endif
 }
 
 static void *cheri_tag_invalidate_one(CPUArchState *env, target_ulong vaddr,
@@ -700,6 +693,43 @@ void cheri_tag_set_many(CPUArchState *env, uint32_t tags, target_ulong vaddr,
     cheri_debug_assert(tagmem);
 
     tagblock_set_tag_many_tagmem(tagmem, page_vaddr_to_tag_offset(vaddr), tags);
+}
+
+/*
+ * Look up the guest-physical page at @page_pa (page aligned) for a tag
+ * snapshot. On success fills @tags with the page's TAGS_PER_PAGE tag bits
+ * (bit i = granule i), sets *@host to the page's host memory and returns
+ * true. Returns false for non-RAM pages and pages with no tagged granules.
+ * Must be called inside an RCU read-side critical section.
+ */
+bool cheri_tag_read_phys_page(CPUState *cs, hwaddr page_pa,
+                              unsigned long *tags, uint8_t **host)
+{
+    hwaddr xlat, plen = TARGET_PAGE_SIZE;
+    MemoryRegion *mr = address_space_translate(cs->as, page_pa, &xlat, &plen,
+                                               false, MEMTXATTRS_UNSPECIFIED);
+
+    if (!memory_region_is_ram(mr) || !mr->ram_block ||
+        !mr->ram_block->cheri_tags || plen < TARGET_PAGE_SIZE) {
+        return false;
+    }
+    uint8_t *ptr = qemu_map_ram_ptr(mr->ram_block, xlat);
+    ram_addr_t ram_offset = qemu_ram_block_host_offset(mr->ram_block, ptr);
+    uint64_t first_tag = ram_offset / CHERI_CAP_SIZE;
+    CheriTagBlock *tagblk = cheri_tag_block(first_tag, mr->ram_block);
+    bool any = false;
+
+    if (!tagblk) {
+        return false;
+    }
+    /* A page's tags never straddle a tag block (blocks are 64 KiB). */
+    const size_t base = CAP_TAGBLK_IDX(first_tag);
+    for (size_t w = 0; w < BITS_TO_LONGS(TAGS_PER_PAGE); w++) {
+        tags[w] = qatomic_read(&tagblk->tag_bitmap[BIT_WORD(base) + w]);
+        any |= tags[w] != 0;
+    }
+    *host = ptr;
+    return any;
 }
 
 bool cheri_tag_get_debug(RAMBlock *ram, ram_addr_t ram_offset)

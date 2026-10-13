@@ -1618,9 +1618,6 @@ void store_cap_to_memory_mmu_index(CPUArchState *env, uint32_t cs,
         cheri_debug_assert(cursor == cap_get_cursor(&stored_cap));
         qemu_log_instr_st_cap(env, vaddr, &stored_cap);
     }
-    qemu_simpoint_track_cap_store(env, vaddr, tag,
-        pesbt_for_mem ^ CAP_NULL_XOR_MASK,
-        cursor);
 #endif
 }
 

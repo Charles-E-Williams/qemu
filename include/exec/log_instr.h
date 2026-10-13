@@ -346,7 +346,23 @@ void qemu_log_instr_evt(CPUArchState *env, uint16_t fn, target_ulong arg0,
  */
 void qemu_log_instr_extra(CPUArchState *env, const char *msg, ...);
 
-bool qemu_simpoint_counting_active(void);
+/*
+ * Instructions left before the next SimPoint event in COUNTING mode.
+ * Decremented by generated code at the start of each user-mode TB
+ * (see gen_tb_start()); when a TB would take it below zero the TB exits
+ * with TB_EXIT_REQUESTED and qemu_simpoint_budget_exit() takes over.
+ */
+#ifndef QEMU_SIMPOINT_BUDGET_DECLARED
+#define QEMU_SIMPOINT_BUDGET_DECLARED
+extern int32_t qemu_simpoint_budget;
+#endif
+
+/*
+ * True in the modes that still need a main-loop check after every TB
+ * (waiting for / stepping to START_PC), so TB chaining must stay off.
+ * COUNTING mode keeps chaining enabled.
+ */
+bool qemu_simpoint_unchained_mode(void);
 
 void qemu_simpoint_count_tb(CPUArchState *env, target_ulong tb_pc, uint64_t icount);
 
@@ -354,16 +370,21 @@ bool qemu_simpoint_waiting_for_start_pc(target_ulong tb_pc, uint32_t tb_size);
 
 void qemu_simpoint_enter_stepping(CPUArchState *env);
 
-bool qemu_simpoint_needs_stepping(uint64_t tb_icount);
+/* Should the TB being translated carry the inline budget check? */
+bool qemu_simpoint_tb_counts(CPUArchState *env, uint32_t cflags);
+
+/*
+ * Called from the main loop when a TB exited with TB_EXIT_REQUESTED.
+ * Returns true if the exit was caused by the SimPoint budget (and has
+ * been handled: refill, step to the boundary, or start tracing).
+ */
+bool qemu_simpoint_budget_exit(CPUState *cpu, struct TranslationBlock *tb);
+
+/* Drop the last memory access recorded for the current instruction. */
+void qemu_log_instr_drop_last_mem(CPUArchState *env);
 
 
-#ifdef TARGET_CHERI
-void qemu_simpoint_track_cap_store(CPUArchState *env, target_ulong vaddr,
-                                   bool tag, target_ulong pesbt,
-                                   target_ulong cursor);
 
-void qemu_simpoint_invalidate_cap(target_ulong vaddr, int32_t size);
-#endif
 
 #else /* ! CONFIG_TCG_LOG_INSTR */
 #define	qemu_log_instr_enabled(cpu) false
@@ -387,11 +408,11 @@ void qemu_simpoint_invalidate_cap(target_ulong vaddr, int32_t size);
 #define qemu_log_gen_printf(...)
 #define qemu_log_gen_printf_flush(base, flush_early, force_flush)
 #define qemu_log_printf_create_globals(...)
-static inline bool qemu_simpoint_counting_active(void) { return false; }
+static inline bool qemu_simpoint_unchained_mode(void) { return false; }
 static inline void qemu_simpoint_count_tb(CPUArchState *env, target_ulong tb_pc, uint64_t icount) {}
 static inline bool qemu_simpoint_waiting_for_start_pc(target_ulong tb_pc, uint32_t tb_size) { return false; }
-static inline bool qemu_simpoint_needs_stepping(uint64_t tb_icount) { return false; }
 static inline void qemu_simpoint_enter_stepping(CPUArchState *env) {}
-static inline void qemu_simpoint_track_cap_store(CPUArchState *env, target_ulong vaddr, bool tag, target_ulong pesbt, target_ulong cursor) {}
-static inline void qemu_simpoint_invalidate_cap(target_ulong vaddr, int32_t size) {}
+static inline bool qemu_simpoint_tb_counts(CPUArchState *env, uint32_t cflags) { return false; }
+static inline bool qemu_simpoint_budget_exit(CPUState *cpu, struct TranslationBlock *tb) { return false; }
+static inline void qemu_log_instr_drop_last_mem(CPUArchState *env) {}
 #endif /* ! CONFIG_TCG_LOG_INSTR */

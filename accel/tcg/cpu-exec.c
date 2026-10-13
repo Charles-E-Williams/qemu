@@ -193,11 +193,6 @@ cpu_tb_exec(CPUState *cpu, TranslationBlock *itb, int *tb_exit)
         cpu_loop_exit(cpu);
     }
 
-    if (unlikely(qemu_simpoint_needs_stepping(itb->icount))) {
-        cpu->cflags_next_tb = (curr_cflags(cpu) & ~CF_COUNT_MASK) | 1;
-        cpu_loop_exit(cpu);
-    }
-
     qemu_thread_jit_execute();
     ret = tcg_qemu_tb_exec(env, tb_ptr);
     cpu->can_do_io = 1;
@@ -215,7 +210,8 @@ cpu_tb_exec(CPUState *cpu, TranslationBlock *itb, int *tb_exit)
 
     trace_exec_tb_exit(last_tb, *tb_exit);
 
-    if (unlikely(qemu_simpoint_counting_active())) {
+    /* WAIT_START_PC / STEPPING_TO_START only; COUNTING is inline. */
+    if (unlikely(qemu_simpoint_unchained_mode())) {
         qemu_simpoint_count_tb(env, itb->pc, itb->icount);
     }
     if (*tb_exit > TB_EXIT_IDX1) {
@@ -697,8 +693,12 @@ static inline void cpu_loop_exec_tb(CPUState *cpu, TranslationBlock *tb,
     tb = cpu_tb_exec(cpu, tb, tb_exit);
     if (*tb_exit != TB_EXIT_REQUESTED) {
 
-        /* Prevents TB from jumping to a new block */
-        if (unlikely(qemu_simpoint_counting_active()))
+        /*
+         * Waiting for / stepping to START_PC checks every TB in
+         * cpu_tb_exec(), so don't chain in those modes. COUNTING mode
+         * counts inline and chains normally.
+         */
+        if (unlikely(qemu_simpoint_unchained_mode()))
             *last_tb = NULL;
         else
             *last_tb = tb;
@@ -715,6 +715,13 @@ static inline void cpu_loop_exec_tb(CPUState *cpu, TranslationBlock *tb,
          * cpu_handle_interrupt.  cpu_handle_interrupt will also
          * clear cpu->icount_decr.u16.high.
          */
+        return;
+    }
+
+    /* SimPoint budget ran out at the start of this TB. */
+    if (qemu_simpoint_budget_exit(cpu, tb) &&
+        !(icount_enabled() &&
+          cpu_neg(cpu)->icount_decr.u16.low < tb->icount)) {
         return;
     }
 

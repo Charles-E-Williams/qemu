@@ -952,196 +952,87 @@ static void emit_champsim_cheri_stop(CPUArchState *env, target_ulong pc)
 }
 
 #ifdef TARGET_CHERI
-
-#define CAP_TRACKER_EMPTY      ((target_ulong)0)
-#define CAP_TRACKER_TOMBSTONE  ((target_ulong)-1)
-#define CAP_TRACKER_INITIAL_SHIFT  20  /* 1M slots initially (~32MB) */
-#define CAP_TRACKER_LOAD_NUM   3
-#define CAP_TRACKER_LOAD_DEN   4       /* 75% load factor */
- 
-typedef struct {
-    target_ulong vaddr;   /* key: 16-byte-aligned VA, 0=empty, -1=tombstone */
-    target_ulong pesbt;
-    target_ulong cursor;
-} cap_store_slot_t;
- 
-static struct {
-    cap_store_slot_t *slots;
-    uint64_t capacity;    /* always a power of 2 */
-    uint64_t mask;        /* capacity - 1 */
-    uint64_t count;       /* live entries (not counting tombstones) */
-    uint64_t tombstones;  /* tombstone count */
-} cap_tracker = { NULL, 0, 0, 0, 0 };
- 
-static inline uint64_t cap_tracker_hash(target_ulong vaddr)
-{
-    /*
-     * vaddr is 16-byte-aligned, so bottom 4 bits are always zero.
-     * Shift out, then multiply by a large odd constant (golden ratio)
-     * to spread bits across the hash space.
-     */
-    uint64_t h = (uint64_t)(vaddr >> 4);
-    h *= 0x9E3779B97F4A7C15ULL;
-    return h;
-}
- 
-static void cap_tracker_init(void)
-{
-    if (cap_tracker.slots)
-        return;
- 
-    cap_tracker.capacity = 1ULL << CAP_TRACKER_INITIAL_SHIFT;
-    cap_tracker.mask = cap_tracker.capacity - 1;
-    cap_tracker.count = 0;
-    cap_tracker.tombstones = 0;
-    cap_tracker.slots = g_malloc0(cap_tracker.capacity *
-                                  sizeof(cap_store_slot_t));
-}
- 
-static void cap_tracker_resize(uint64_t new_capacity)
-{
-    cap_store_slot_t *old_slots = cap_tracker.slots;
-    uint64_t old_capacity = cap_tracker.capacity;
- 
-    cap_tracker.capacity = new_capacity;
-    cap_tracker.mask = new_capacity - 1;
-    cap_tracker.count = 0;
-    cap_tracker.tombstones = 0;
-    cap_tracker.slots = g_malloc0(new_capacity * sizeof(cap_store_slot_t));
- 
-    /* Rehash all live entries — no tombstones in new table */
-    for (uint64_t i = 0; i < old_capacity; i++) {
-        target_ulong k = old_slots[i].vaddr;
-        if (k != CAP_TRACKER_EMPTY && k != CAP_TRACKER_TOMBSTONE) {
-            uint64_t idx = cap_tracker_hash(k) & cap_tracker.mask;
-            while (cap_tracker.slots[idx].vaddr != CAP_TRACKER_EMPTY)
-                idx = (idx + 1) & cap_tracker.mask;
-            cap_tracker.slots[idx] = old_slots[i];
-            cap_tracker.count++;
-        }
-    }
- 
-    g_free(old_slots);
-}
- 
-static inline void cap_tracker_maybe_grow(void)
-{
-    uint64_t used = cap_tracker.count + cap_tracker.tombstones;
-    if (used * CAP_TRACKER_LOAD_DEN < cap_tracker.capacity * CAP_TRACKER_LOAD_NUM)
-        return;
- 
-    /*
-     * If tombstones are >25% of used slots, rehash at same size to
-     * reclaim them. Otherwise double capacity.
-     */
-    uint64_t new_cap;
-    if (cap_tracker.tombstones * 4 > used) {
-        new_cap = cap_tracker.capacity;
-    } else {
-        new_cap = cap_tracker.capacity * 2;
-    }
- 
-    fprintf(stderr, "Cap tracker resize: %" PRIu64 " -> %" PRIu64
-            " slots (%" PRIu64 " live, %" PRIu64 " tombstones)\n",
-            cap_tracker.capacity, new_cap,
-            cap_tracker.count, cap_tracker.tombstones);
- 
-    cap_tracker_resize(new_cap);
-}
- 
-static void cap_tracker_insert(target_ulong vaddr, target_ulong pesbt,
-                               target_ulong cursor)
-{
-    cap_tracker_maybe_grow();
- 
-    uint64_t idx = cap_tracker_hash(vaddr) & cap_tracker.mask;
- 
-    while (1) {
-        target_ulong k = cap_tracker.slots[idx].vaddr;
- 
-        if (k == vaddr) {
-            /* Key exists — update in place */
-            cap_tracker.slots[idx].pesbt = pesbt;
-            cap_tracker.slots[idx].cursor = cursor;
-            return;
-        }
- 
-        if (k == CAP_TRACKER_EMPTY || k == CAP_TRACKER_TOMBSTONE) {
-            if (k == CAP_TRACKER_TOMBSTONE)
-                cap_tracker.tombstones--;
-            cap_tracker.slots[idx].vaddr = vaddr;
-            cap_tracker.slots[idx].pesbt = pesbt;
-            cap_tracker.slots[idx].cursor = cursor;
-            cap_tracker.count++;
-            return;
-        }
- 
-        idx = (idx + 1) & cap_tracker.mask;
-    }
-}
- 
-static void cap_tracker_remove(target_ulong vaddr)
-{
-    if (!cap_tracker.slots || cap_tracker.count == 0)
-        return;
- 
-    uint64_t idx = cap_tracker_hash(vaddr) & cap_tracker.mask;
- 
-    while (1) {
-        target_ulong k = cap_tracker.slots[idx].vaddr;
- 
-        if (k == CAP_TRACKER_EMPTY)
-            return;  /* not found */
- 
-        if (k == vaddr) {
-            cap_tracker.slots[idx].vaddr = CAP_TRACKER_TOMBSTONE;
-            cap_tracker.count--;
-            cap_tracker.tombstones++;
-            return;
-        }
- 
-        idx = (idx + 1) & cap_tracker.mask;
-    }
-}
+#include "cheri_tagmem.h"
 
 /*
- * Write all tracked cap stores to the current trace file as a header.
- * Decompresses capabilities here, when we actually need the data.
+ * Pre-SimPoint capability snapshot.
+ *
+ * A trace starts in the middle of the program, so the simulator's tag
+ * memory starts empty. At the start of each SimPoint trace we write one
+ * CAP_OP_PRESIMPOINT entry for every tagged capability currently in the
+ * running process's user memory, read straight from QEMU's tag memory:
+ * walk the user page table, and for each mapped page with tags, decode the
+ * tagged granules. Being a snapshot of the real state, this includes
+ * capabilities the kernel wrote into user memory (argv/auxv, signal frames,
+ * ...) and nothing left behind by other processes or freed pages.
+ * Each mapping is reported at its own VA, so a physical page mapped twice
+ * appears under both addresses.
  */
-static void write_cap_store_header(void)
+typedef struct {
+    CPUState *cs;
+    FILE *logfile;
+    uint64_t pages;
+    uint64_t tagged_pages;
+    uint64_t caps;
+} cap_snapshot_state_t;
+
+static void cap_snapshot_page(void *opaque, target_ulong va, hwaddr pa)
 {
-    if (!cap_tracker.slots || cap_tracker.count == 0)
+    cap_snapshot_state_t *st = opaque;
+    unsigned long tags[BITS_TO_LONGS(TARGET_PAGE_SIZE / CHERI_CAP_SIZE)];
+    uint8_t *host;
+
+    st->pages++;
+    if (!cheri_tag_read_phys_page(st->cs, pa, tags, &host))
         return;
- 
-    fprintf(stderr, "Writing %" PRIu64 " pre-SimPoint capability stores\n",
-            cap_tracker.count);
- 
-    FILE *logfile = qemu_log_lock();
- 
-    for (uint64_t i = 0; i < cap_tracker.capacity; i++) {
-        target_ulong k = cap_tracker.slots[i].vaddr;
-        if (k == CAP_TRACKER_EMPTY || k == CAP_TRACKER_TOMBSTONE)
+    st->tagged_pages++;
+
+    for (int i = 0; i < TARGET_PAGE_SIZE / CHERI_CAP_SIZE; i++) {
+        if (!test_bit(i, tags))
             continue;
- 
+
+        const uint8_t *granule = host + i * CHERI_CAP_SIZE;
+        target_ulong pesbt = ldq_p(granule + CHERI_MEM_OFFSET_METADATA) ^
+                             CAP_NULL_XOR_MASK;
+        target_ulong cursor = ldq_p(granule + CHERI_MEM_OFFSET_CURSOR);
         cap_register_t cr;
-        CAP_cc(decompress_raw)(cap_tracker.slots[i].pesbt,
-                               cap_tracker.slots[i].cursor, true, &cr);
- 
+        CAP_cc(decompress_raw)(pesbt, cursor, true, &cr);
+
         champsim_cheri_trace_entry_t trace = {0};
-        trace.destination_memory[0] = k;
+        trace.destination_memory[0] = va + i * CHERI_CAP_SIZE;
         trace.cap_tag               = 1;
         trace.cap_base              = cap_get_base(&cr);
         trace.cap_length            = cap_get_length_sat(&cr);
         trace.cap_offset            = cap_get_offset(&cr);
         trace.cap_perms             = cap_get_perms(&cr);
         trace.cap_op                = CAP_OP_PRESIMPOINT;
- 
-        fwrite(&trace, sizeof(trace), 1, logfile);
+        fwrite(&trace, sizeof(trace), 1, st->logfile);
+        st->caps++;
     }
- 
-    qemu_log_unlock(logfile);
 }
 
+static void write_cap_snapshot_header(CPUArchState *env)
+{
+#ifdef TARGET_RISCV
+    cap_snapshot_state_t st = { .cs = env_cpu(env) };
+
+    st.logfile = qemu_log_lock();
+    WITH_RCU_READ_LOCK_GUARD() {
+        if (!riscv_cpu_for_each_user_page(env, cap_snapshot_page, &st)) {
+            fprintf(stderr, "Pre-SimPoint capability snapshot skipped: "
+                    "paging is not enabled\n");
+        }
+    }
+    qemu_log_unlock(st.logfile);
+
+    fprintf(stderr, "Pre-SimPoint capability snapshot: %" PRIu64
+            " capabilities in %" PRIu64 " of %" PRIu64 " user pages\n",
+            st.caps, st.tagged_pages, st.pages);
+#else
+    fprintf(stderr, "Pre-SimPoint capability snapshot not implemented "
+            "for this target\n");
+#endif
+}
 #endif
 
 
@@ -1200,7 +1091,7 @@ static void simpoint_open_trace(CPUArchState *env, int idx, bool is_warmup)
 
 #ifdef TARGET_CHERI
     if (trace_format == &trace_formats[4]) {
-        write_cap_store_header();
+        write_cap_snapshot_header(env);
         fprintf(stderr, "Starting SimPoint %d (Warmup: %s), output: %s\n",
                 idx, is_warmup ? "yes" : "no", filename);
     } else
@@ -1256,9 +1147,161 @@ static interval_match_t find_active_interval(uint64_t instr_count)
 static void cpu_loglevel_switch(CPUArchState *env, qemu_log_instr_loglevel_t level);
 static void global_loglevel_enable(void);
 
+/*
+ * SimPoint COUNTING budget. Generated code subtracts each user-mode TB's
+ * instruction count at TB entry (gen_tb_start) and exits the TB instead
+ * when it would go negative; see qemu_simpoint_budget_exit().
+ */
+int32_t qemu_simpoint_budget = INT32_MAX;
+
+/* Current user instruction count while in COUNTING mode. */
+static uint64_t simpoint_counting_count(void)
+{
+    return sp_state.budget_target - sp_state.budget_reserve -
+           (uint64_t)qatomic_read(&qemu_simpoint_budget);
+}
+
+/* Put @remaining instructions in the 32-bit budget, the rest in reserve. */
+static void simpoint_load_budget(uint64_t remaining)
+{
+    int32_t chunk = remaining > INT32_MAX ? INT32_MAX : (int32_t)remaining;
+
+    sp_state.budget_reserve = remaining - chunk;
+    qatomic_set(&qemu_simpoint_budget, chunk);
+}
+
+/* Charge @n executed user instructions that bypassed the inline check. */
+static void simpoint_charge_insns(uint64_t n)
+{
+    uint64_t remaining = (uint64_t)qatomic_read(&qemu_simpoint_budget) +
+                         sp_state.budget_reserve;
+
+    simpoint_load_budget(remaining > n ? remaining - n : 0);
+}
+
+/* One past the end of the last simpoint interval (shutdown point). */
+static uint64_t simpoint_last_end(void)
+{
+    uint64_t last = 0;
+
+    for (int i = 0; i < simpoints->len; i++) {
+        last = MAX(last, g_array_index(simpoints, uint64_t, i));
+    }
+    return last + INTERVAL_SIZE;
+}
+
+/*
+ * Arm the budget for the next event after @count user instructions: the
+ * next (warmup-adjusted) simpoint start, or the shutdown point after the
+ * last simpoint. If @count is already inside an interval, fire at once.
+ */
+static void simpoint_arm_budget(uint64_t count)
+{
+    uint64_t target;
+
+    if (find_active_interval(count).should_trace) {
+        target = count;
+    } else {
+        uint64_t last_end = simpoint_last_end();
+
+        target = count > last_end ? count : last_end + 1;
+        for (int i = 0; i < adjusted_simpoints->len; i++) {
+            uint64_t adj = g_array_index(adjusted_simpoints, uint64_t, i);
+            if (adj > count && adj < target) {
+                target = adj;
+            }
+        }
+    }
+
+    sp_state.budget_target = target;
+    simpoint_load_budget(target - count);
+}
+
+/*
+ * All SimPoint mode changes go through here so CF_SIMPOINT_COUNT (and
+ * with it the inline budget check) is on exactly while in COUNTING mode.
+ * Because the bit is part of the TB lookup key, TBs translated with and
+ * without the check are never mixed up, flush or no flush.
+ */
+static void simpoint_set_mode(CPUArchState *env, simpoint_mode_t mode)
+{
+    bool counting = (mode == SIMPOINT_MODE_COUNTING) && simpoints;
+    CPUState *cpu;
+
+    if (sp_state.mode == SIMPOINT_MODE_COUNTING &&
+        mode != SIMPOINT_MODE_COUNTING && simpoints) {
+        sp_state.instr_count = simpoint_counting_count();
+    }
+
+    /*
+     * Traced windows count completed instructions only. When one ends, add
+     * back the faulting instructions it skipped so counting resumes in the
+     * same units as the BBVs (which count them).
+     */
+    if (sp_state.mode == SIMPOINT_MODE_TRACING &&
+        mode != SIMPOINT_MODE_TRACING) {
+        sp_state.instr_count += sp_state.window_faults;
+    }
+    if (mode == SIMPOINT_MODE_TRACING && sp_state.mode != SIMPOINT_MODE_TRACING) {
+        sp_state.window_faults = 0;
+    }
+
+    sp_state.mode = mode;
+
+    if (counting) {
+        simpoint_arm_budget(sp_state.instr_count);
+    } else {
+        qatomic_set(&qemu_simpoint_budget, INT32_MAX);
+        sp_state.budget_reserve = 0;
+    }
+
+    CPU_FOREACH(cpu) {
+        if (counting) {
+            cpu->tcg_cflags |= CF_SIMPOINT_COUNT;
+        } else {
+            cpu->tcg_cflags &= ~CF_SIMPOINT_COUNT;
+        }
+    }
+}
+
+/*
+ * Set while do_cpu_loglevel_switch() commits the instruction that was
+ * pending when user-only logging was paused. That instruction executed in
+ * user mode, but by the time the deferred commit runs the CPU has already
+ * trapped (interrupt, ecall, fault), so cpu_in_user_mode() says otherwise.
+ */
+static bool sp_deferred_user_commit;
+
+/* Did the instruction being committed execute in user mode? */
+static bool simpoint_commit_is_user(CPUArchState *env)
+{
+    return sp_deferred_user_commit || cpu_in_user_mode(env);
+}
+
+/*
+ * Was the instruction pending commit cut short by a synchronous exception?
+ * Instruction-fetch faults are raised before the next instruction starts,
+ * so in that case the pending instruction (the last one of the previous
+ * TB) did complete. Interrupts are only taken between instructions.
+ */
+static bool simpoint_pending_insn_faulted(cpu_log_instr_info_t *iinfo)
+{
+    if (!(iinfo->flags & LI_FLAG_INTR_TRAP))
+        return false;
+#ifdef TARGET_RISCV
+    switch (iinfo->intr_code) {
+    case RISCV_EXCP_INST_ACCESS_FAULT:
+    case RISCV_EXCP_INST_PAGE_FAULT:
+    case RISCV_EXCP_INST_GUEST_PAGE_FAULT:
+        return false;
+    }
+#endif
+    return true;
+}
+
 static bool handle_interval_simpoints(CPUArchState *env, cpu_log_instr_info_t *iinfo)
 {
-    if (!cpu_in_user_mode(env))
+    if (!simpoint_commit_is_user(env))
         return false;
  
     interval_match_t m = find_active_interval(sp_state.instr_count);
@@ -1272,7 +1315,7 @@ static bool handle_interval_simpoints(CPUArchState *env, cpu_log_instr_info_t *i
              * where we get here first.
              */
             simpoint_open_trace(env, m.idx, m.is_warmup);
-            sp_state.mode        = SIMPOINT_MODE_TRACING;
+            simpoint_set_mode(env, SIMPOINT_MODE_TRACING);
             sp_state.in_warmup   = m.is_warmup;
             sp_state.current_idx = m.idx;
  
@@ -1306,7 +1349,7 @@ static bool handle_interval_simpoints(CPUArchState *env, cpu_log_instr_info_t *i
              * More simpoints remain. Disable CF_LOG_INSTR so TBs
              * recompile without logging overhead. 
              */
-            sp_state.mode = SIMPOINT_MODE_COUNTING;
+            simpoint_set_mode(env, SIMPOINT_MODE_COUNTING);
             cpu_loglevel_switch(env, QEMU_LOG_INSTR_LOGLEVEL_NONE);
  
             fprintf(stderr,
@@ -1317,7 +1360,7 @@ static bool handle_interval_simpoints(CPUArchState *env, cpu_log_instr_info_t *i
         } else {
             
              //All SimPoints done. Shut down.
-            sp_state.mode = SIMPOINT_MODE_INACTIVE;
+            simpoint_set_mode(env, SIMPOINT_MODE_INACTIVE);
             cpu_loglevel_switch(env, QEMU_LOG_INSTR_LOGLEVEL_NONE);
             fprintf(stderr,
                     "SimPoint tracing complete at %" PRIu64
@@ -1353,7 +1396,7 @@ static bool handle_pc_simpoints(CPUArchState *env, cpu_log_instr_state_t *cpulog
                                                            simpoint_pc_entry_t, i);
                 if (iinfo->pc == entry->pc && *count == entry->execution_count) {
                     simpoint_open_trace(env, i, false);
-                    sp_state.mode             = SIMPOINT_MODE_TRACING;
+                    simpoint_set_mode(env, SIMPOINT_MODE_TRACING);
                     sp_state.current_idx      = i;
                     cpulog->simpoint_insn_count = 0;
                     break;
@@ -1426,8 +1469,19 @@ static void do_instr_commit(CPUArchState *env)
      * both CHERI and non-CHERI. If we somehow get here, just bail.
      * (Cap store tracking is handled by the direct hooks now.)
      */
-    if (sp_state.mode == SIMPOINT_MODE_COUNTING ||
-        sp_state.mode == SIMPOINT_MODE_WAIT_START_PC || 
+    if (sp_state.mode == SIMPOINT_MODE_COUNTING) {
+        /*
+         * A logging TB is still running just after a simpoint ended,
+         * before the log-level switch and TB flush take effect. These
+         * instructions did execute, and such TBs carry no inline budget
+         * check (see qemu_simpoint_tb_counts), so charge them here using
+         * the same rule handle_interval_simpoints() uses.
+         */
+        if (simpoints && simpoint_commit_is_user(env))
+            simpoint_charge_insns(1);
+        return;
+    }
+    if (sp_state.mode == SIMPOINT_MODE_WAIT_START_PC || 
         sp_state.mode == SIMPOINT_MODE_STEPPING_TO_START) {
         return;
     }
@@ -1511,10 +1565,39 @@ static void do_cpu_loglevel_switch(CPUState *cpu, run_on_cpu_data data)
     /* Emit start/stop events */
     if (prev_level_active) {
         if (cpulog->starting) {
+            /*
+             * Nothing logged yet since the last start. reset_log_buffer()
+             * clears 'starting'; keep it if logging stays active (e.g.
+             * ALL -> USER when a later SimPoint reopens the log), or the
+             * first commit logs and counts an empty entry.
+             */
             reset_log_buffer(cpulog, iinfo);
+            cpulog->starting = next_level_active;
             return;
         }
-        do_instr_commit(env);
+        /*
+         * With user-only logging, an active log level means the pending
+         * instruction ran in user mode, even though we are switching away
+         * from it now. Without this, SimPoint drops (and doesn't count)
+         * the last instruction before every trap.
+         */
+        if ((simpoints || simpoint_pcs) &&
+            sp_state.mode == SIMPOINT_MODE_TRACING &&
+            simpoint_pending_insn_faulted(iinfo)) {
+            /*
+             * SimPoint traces only contain completed instructions, and a
+             * window of N instructions holds exactly N of them: the one that
+             * raised the exception (ecall, page fault, CHERI fault, ...) is
+             * neither traced nor counted here. It is added back to the
+             * count when the window ends (see simpoint_set_mode).
+             */
+            sp_state.window_faults++;
+        } else {
+            sp_deferred_user_commit =
+                (prev_level == QEMU_LOG_INSTR_LOGLEVEL_USER);
+            do_instr_commit(env);
+            sp_deferred_user_commit = false;
+        }
         emit_stop_event(env, cpu_get_recent_pc(env));
         /* Instruction commit may have advanced to the next iinfo buffer slot */
         iinfo = get_cpu_log_instr_info(env);
@@ -1914,6 +1997,19 @@ static inline void qemu_log_instr_mem_cap(
     g_array_append_val(iinfo->mem, m);  
 }
 
+/*
+ * Forget the most recent memory access recorded for the current instruction.
+ * For emulator-internal accesses that are not architectural, e.g. the
+ * compare-read SC.C uses to check its reservation.
+ */
+void qemu_log_instr_drop_last_mem(CPUArchState *env)
+{
+    cpu_log_instr_info_t *iinfo = get_cpu_log_instr_info(env);
+
+    if (iinfo->mem->len > 0)
+        g_array_set_size(iinfo->mem, iinfo->mem->len - 1);
+}
+
 void qemu_log_instr_ld_cap(CPUArchState *env, target_ulong addr,
                            const cap_register_t *value)
 {
@@ -1988,109 +2084,57 @@ void qemu_log_instr_extra(CPUArchState *env, const char *msg, ...)
 
 
 /*
- * Per-TB simpoint counting. 
- * Cost: ~1 function call + a few comparisons per TB.
- * For a TB averaging 10 instructions, this is ~10x cheaper than
- * per-instruction CF_LOG_INSTR overhead.
+ * Main-loop hook while waiting for / stepping to START_PC.
+ *
+ * COUNTING mode no longer comes through here: user-mode TBs decrement
+ * qemu_simpoint_budget inline (gen_tb_start) and TB chaining stays on.
+ * See qemu_simpoint_budget_exit() for what happens at a boundary.
  */
-void qemu_simpoint_count_tb(CPUArchState *env, target_ulong tb_pc, 
-                                uint64_t icount)
+void qemu_simpoint_count_tb(CPUArchState *env, target_ulong tb_pc,
+                            uint64_t icount)
 {
     CPUState *cpu = env_cpu(env);
-    if (!cpu_in_user_mode(env)) 
+
+    if (!cpu_in_user_mode(env))
         return;
-    
 
-    switch (sp_state.mode) {
+    if (sp_state.mode != SIMPOINT_MODE_STEPPING_TO_START)
+        return;
 
-    case SIMPOINT_MODE_WAIT_START_PC:
-        break;
+    /* Walking through 1-insn TBs to find exact START_PC. */
+    if (tb_pc == START_PC) {
+        fprintf(stderr, "START_PC 0x%" PRIx64 " reached\n", START_PC);
 
-    case SIMPOINT_MODE_STEPPING_TO_START: //Walking through 1-insn TBs to find exact START_PC.
-        if (tb_pc == START_PC) {
-            fprintf(stderr, "START_PC 0x%" PRIx64 " reached\n", START_PC);
-            
-            sp_state.instr_count = 0;
+        sp_state.instr_count = 0;
 
-            /* Check if interval 0 is immediately a simpoint */
-            interval_match_t m = find_active_interval(0);
-            if (m.should_trace) {
-                sp_state.mode        = SIMPOINT_MODE_TRACING;
-                simpoint_open_trace(env, m.idx, m.is_warmup);
-                sp_state.in_warmup   = m.is_warmup;
-                sp_state.current_idx = m.idx;
-                global_loglevel_enable();
-                cpu_loglevel_switch(env, QEMU_LOG_INSTR_LOGLEVEL_USER);
-            } else {
-                sp_state.mode = SIMPOINT_MODE_COUNTING;
-            }
-        } else {
-            //Not there yet. Keep incrementing
-            cpu->cflags_next_tb = (curr_cflags(cpu) & ~CF_COUNT_MASK) | 1;
-        }
-        break;
-
-    case SIMPOINT_MODE_COUNTING: {
-        sp_state.instr_count += icount;
-
-        interval_match_t m = find_active_interval(sp_state.instr_count);
-
+        /* Check if interval 0 is immediately a simpoint */
+        interval_match_t m = find_active_interval(0);
         if (m.should_trace) {
-            fprintf(stderr,
-                "SimPoint %d reached at %" PRIu64 " instructions"
-                " (warmup: %" PRIu64 " simpoint start: %" PRIu64
-                "). Enabling CF_LOG_INSTR\n",
-                m.idx, sp_state.instr_count,
-                g_array_index(adjusted_simpoints, uint64_t, m.idx),
-                g_array_index(simpoints, uint64_t, m.idx));
-
-            sp_state.mode = SIMPOINT_MODE_TRACING;
+            simpoint_set_mode(env, SIMPOINT_MODE_TRACING);
             simpoint_open_trace(env, m.idx, m.is_warmup);
             sp_state.in_warmup   = m.is_warmup;
             sp_state.current_idx = m.idx;
-
             global_loglevel_enable();
             cpu_loglevel_switch(env, QEMU_LOG_INSTR_LOGLEVEL_USER);
-
-
-            tb_flush(env_cpu(env));
-            cpu_loop_exit(env_cpu(env));
+        } else {
+            simpoint_set_mode(env, SIMPOINT_MODE_COUNTING);
         }
-
-        /* Check if we're past all simpoints */
-        if (!m.should_trace && simpoints) {
-            uint64_t last_end = g_array_index(simpoints, uint64_t,
-                                              simpoints->len - 1)
-                              + INTERVAL_SIZE;
-            if (sp_state.instr_count > last_end) {
-                fprintf(stderr,
-                    "All simpoints complete at icount=%" PRIu64
-                    ", shutting down\n", sp_state.instr_count);
-                sp_state.stop = true;
-                sp_state.mode = SIMPOINT_MODE_INACTIVE;
-                qemu_system_shutdown_request(SHUTDOWN_CAUSE_GUEST_SHUTDOWN);
-            }
-        }
-        break;
-    }
-
-    case SIMPOINT_MODE_TRACING:
-    case SIMPOINT_MODE_INACTIVE:
-        break;
+    } else {
+        /* Not there yet. Keep stepping */
+        cpu->cflags_next_tb = (curr_cflags(cpu) & ~CF_COUNT_MASK) | 1;
     }
 }
 
-bool qemu_simpoint_counting_active(void)
+bool qemu_simpoint_unchained_mode(void)
 {
-    return sp_state.mode == SIMPOINT_MODE_COUNTING ||
-           sp_state.mode == SIMPOINT_MODE_WAIT_START_PC ||
+    return sp_state.mode == SIMPOINT_MODE_WAIT_START_PC ||
            sp_state.mode == SIMPOINT_MODE_STEPPING_TO_START;
 }
 
-/* 
+/*
 * Some starting pcs may be in the middle of a translation block
-* so we check the range of START_PC to detect if we're approaching it 
-*/ 
+* so we check the range of START_PC to detect if we're approaching it
+*/
 bool qemu_simpoint_waiting_for_start_pc(target_ulong tb_pc, uint32_t tb_size)
 {
     return sp_state.mode == SIMPOINT_MODE_WAIT_START_PC &&
@@ -2107,82 +2151,120 @@ void qemu_simpoint_enter_stepping(CPUArchState *env)
     fprintf(stderr, "START_PC 0x%" PRIx64 " in TB range, "
             "stepping with 1-insn TBs\n", START_PC);
 
-    sp_state.mode = SIMPOINT_MODE_STEPPING_TO_START;
-    
+    simpoint_set_mode(env, SIMPOINT_MODE_STEPPING_TO_START);
+
     CPUState *cpu = env_cpu(env);
     cpu->cflags_next_tb = (curr_cflags(cpu) & ~CF_COUNT_MASK) | 1;
 }
 
+/*
+ * Translation-time decision: does this TB get the inline budget check?
+ * CF_SIMPOINT_COUNT is only in the CPU's cflags while in COUNTING mode,
+ * and the privilege level is part of the TB flags, so a TB translated in
+ * user mode only ever runs in user mode.
+ */
+bool qemu_simpoint_tb_counts(CPUArchState *env, uint32_t cflags)
+{
+    /*
+     * A TB that still logs (translated in the short window before the
+     * log-level switch lands) is counted by its commits instead, so it
+     * must not also get the inline check.
+     */
+    return (cflags & CF_SIMPOINT_COUNT) && cpu_in_user_mode(env) &&
+           !qemu_log_instr_enabled(env);
+}
 
 /*
-* If a simpoint boundary falls strictly within this TB's
-* instruction range, the TB would overshoot. Force 1-insn.
-*/
-bool qemu_simpoint_needs_stepping(uint64_t tb_icount)
+ * The budget reached zero: sp_state.budget_target user instructions have
+ * executed. Start tracing, shut down, or (defensively) re-arm.
+ */
+static void simpoint_budget_event(CPUArchState *env)
 {
-    if (sp_state.mode != SIMPOINT_MODE_COUNTING || !simpoints || tb_icount <= 1)
+    uint64_t count = sp_state.budget_target;
+    interval_match_t m;
+
+    sp_state.instr_count = count;
+    m = find_active_interval(count);
+
+    if (m.should_trace) {
+        fprintf(stderr,
+            "SimPoint %d reached at %" PRIu64 " instructions"
+            " (warmup: %" PRIu64 " simpoint start: %" PRIu64
+            "). Enabling CF_LOG_INSTR\n",
+            m.idx, count,
+            g_array_index(adjusted_simpoints, uint64_t, m.idx),
+            g_array_index(simpoints, uint64_t, m.idx));
+
+        simpoint_set_mode(env, SIMPOINT_MODE_TRACING);
+        simpoint_open_trace(env, m.idx, m.is_warmup);
+        sp_state.in_warmup   = m.is_warmup;
+        sp_state.current_idx = m.idx;
+
+        global_loglevel_enable();
+        cpu_loglevel_switch(env, QEMU_LOG_INSTR_LOGLEVEL_USER);
+
+        tb_flush(env_cpu(env));
+        cpu_loop_exit(env_cpu(env));
+    }
+
+    if (count > simpoint_last_end()) {
+        fprintf(stderr,
+            "All simpoints complete at icount=%" PRIu64
+            ", shutting down\n", count);
+        sp_state.stop = true;
+        simpoint_set_mode(env, SIMPOINT_MODE_INACTIVE);
+        qemu_system_shutdown_request(SHUTDOWN_CAUSE_GUEST_SHUTDOWN);
+        return;
+    }
+
+    /* Not an event (should not happen); wait for the next one. */
+    simpoint_arm_budget(count);
+}
+
+/*
+ * A TB exited with TB_EXIT_REQUESTED before executing anything. If that was
+ * the inline budget check (budget < this TB's instruction count), handle it:
+ *  - more budget in reserve: refill and retry the TB;
+ *  - boundary falls inside this TB: retranslate it to end exactly at the
+ *    boundary (same idea as icount's cflags_next_tb);
+ *  - budget is exactly zero: we are at the boundary, run the event.
+ */
+bool qemu_simpoint_budget_exit(CPUState *cpu, TranslationBlock *tb)
+{
+    CPUArchState *env = cpu->env_ptr;
+    int32_t budget = qatomic_read(&qemu_simpoint_budget);
+    uint64_t remaining;
+
+    if (!(tb_cflags(tb) & CF_SIMPOINT_COUNT) || !cpu_in_user_mode(env) ||
+        (int64_t)budget >= (int64_t)tb->icount) {
         return false;
-
-    uint64_t count_before = sp_state.instr_count;
-    uint64_t count_after  = count_before + tb_icount;
-
-    for (int i = 0; i < simpoints->len; i++) {
-        uint64_t adj_start = g_array_index(adjusted_simpoints, uint64_t, i);
-        if (adj_start > count_before && adj_start <= count_after)
-            return true;
     }
-    return false;
-}
 
-
-#ifdef TARGET_CHERI
-/*
- * Called directly from store_cap_to_memory_mmu_index  
- * Runs on EVERY capability store
- * independent of CF_LOG_INSTR.
- */
-void qemu_simpoint_track_cap_store(CPUArchState *env, target_ulong vaddr,
-                                   bool tag, target_ulong pesbt,
-                                   target_ulong cursor)
-{
-    if (sp_state.mode == SIMPOINT_MODE_INACTIVE && !simpoints && !simpoint_pcs)
-        return;
- 
-    if (!cpu_in_user_mode(env))
-        return;
- 
-    cap_tracker_init();
- 
-    target_ulong aligned = vaddr & ~((target_ulong)15);
- 
-    if (tag) {
-        cap_tracker_insert(aligned, pesbt, cursor);
-    } else {
-        cap_tracker_remove(aligned);
+    if (sp_state.mode != SIMPOINT_MODE_COUNTING) {
+        /* Stale counting TB reached through an old chain; let it run. */
+        qatomic_set(&qemu_simpoint_budget, INT32_MAX);
+        return true;
     }
-}
- 
-/*
- * Called from cheri_tag_invalidate / cheri_tag_invalidate_aligned
- * when a non-capability store overwrites memory that might hold a
- * tagged capability. Removes the entry from the tracker.
- */
-void qemu_simpoint_invalidate_cap(target_ulong vaddr, int32_t size)
-{
-    if (sp_state.mode == SIMPOINT_MODE_INACTIVE && !simpoints && !simpoint_pcs)
-        return;
-    if (!cap_tracker.slots)
-        return;
- 
-    target_ulong start = vaddr & ~((target_ulong)15);
-    target_ulong end   = (vaddr + size - 1) & ~((target_ulong)15);
- 
-    cap_tracker_remove(start);
-    if (end != start)
-        cap_tracker_remove(end);
+
+    remaining = (uint64_t)budget + sp_state.budget_reserve;
+
+    if (remaining >= tb->icount) {
+        simpoint_load_budget(remaining);
+        return true;
+    }
+
+    if (remaining > 0) {
+        simpoint_load_budget(remaining);
+        cpu->cflags_next_tb = (tb_cflags(tb) & ~CF_COUNT_MASK) | remaining;
+        return true;
+    }
+
+    simpoint_budget_event(env);
+    return true;
 }
 
-#endif /* TARGET_CHERI */
+
+
 
 /*
  *  A printf that takes an array of argments unioned of all possible argument
@@ -2683,9 +2765,9 @@ void helper_qemu_log_instr_simpoint_start(CPUArchState *env, target_ulong pc)
     sp_state.file_open   = false;
 
     if (START_PC != 0) {
-        sp_state.mode = SIMPOINT_MODE_WAIT_START_PC;
+        simpoint_set_mode(env, SIMPOINT_MODE_WAIT_START_PC);
     } else {
-        sp_state.mode = SIMPOINT_MODE_COUNTING;
+        simpoint_set_mode(env, SIMPOINT_MODE_COUNTING);
     } 
 
 
@@ -2702,14 +2784,17 @@ void helper_qemu_log_instr_simpoint_start(CPUArchState *env, target_ulong pc)
 /* Stop logging on the current CPU if we're outside the simpoint region*/
 void helper_qemu_log_instr_simpoint_stop(CPUArchState *env, target_ulong pc)
 {
+    bool was_tracing = sp_state.mode == SIMPOINT_MODE_TRACING;
+
+    /* Leaving COUNTING mode syncs instr_count from the inline budget. */
+    simpoint_set_mode(env, SIMPOINT_MODE_INACTIVE);
+
     fprintf(stderr, "Simpoint-aware tracing stopped (counted %" PRIu64 " instructions)\n",
             sp_state.instr_count);
 
     /* If we were in tracing mode, clean up */
-    if (sp_state.mode == SIMPOINT_MODE_TRACING)
+    if (was_tracing)
         simpoint_close_trace();
-
-    sp_state.mode = SIMPOINT_MODE_INACTIVE;
 
     /* Disable CF_LOG_INSTR if it was on */
     cpu_loglevel_switch(env, QEMU_LOG_INSTR_LOGLEVEL_NONE);

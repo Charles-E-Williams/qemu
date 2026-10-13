@@ -32,9 +32,40 @@ static inline void gen_io_end(void)
     tcg_temp_free_i32(tmp);
 }
 
-static inline void gen_tb_start(const TranslationBlock *tb)
+#ifdef CONFIG_TCG_LOG_INSTR
+/* SimPoint COUNTING budget, see include/exec/log_instr.h */
+#ifndef QEMU_SIMPOINT_BUDGET_DECLARED
+#define QEMU_SIMPOINT_BUDGET_DECLARED
+extern int32_t qemu_simpoint_budget;
+#endif
+static TCGOp *simpoint_start_insn;
+
+#if UINTPTR_MAX == UINT32_MAX
+# define simpoint_budget_ptr() \
+    ((TCGv_ptr)tcg_constant_i32((intptr_t)&qemu_simpoint_budget))
+#else
+# define simpoint_budget_ptr() \
+    ((TCGv_ptr)tcg_constant_i64((intptr_t)&qemu_simpoint_budget))
+#endif
+#endif
+
+/*
+ * @simpoint_count: emit the SimPoint COUNTING budget check. Like icount,
+ * the TB's instruction count is subtracted up front (the immediate is
+ * patched in gen_tb_end) and the TB exits with TB_EXIT_REQUESTED before
+ * executing anything if the budget would go negative. Both checks run
+ * before either counter is stored, so an exit never charges a TB that
+ * did not execute. Direct and indirect TB chaining are unaffected.
+ */
+static inline void gen_tb_start_simpoint(const TranslationBlock *tb,
+                                         bool simpoint_count)
 {
     TCGv_i32 count;
+#ifdef CONFIG_TCG_LOG_INSTR
+    TCGv_i32 sp_budget = NULL;
+#else
+    tcg_debug_assert(!simpoint_count);
+#endif
 
     tcg_ctx->exitreq_label = gen_new_label();
     if (tb_cflags(tb) & CF_USE_ICOUNT) {
@@ -59,6 +90,20 @@ static inline void gen_tb_start(const TranslationBlock *tb)
 
     tcg_gen_brcondi_i32(TCG_COND_LT, count, 0, tcg_ctx->exitreq_label);
 
+#ifdef CONFIG_TCG_LOG_INSTR
+    if (simpoint_count) {
+        /* Local temp: the value is stored after the branch below. */
+        sp_budget = tcg_temp_local_new_i32();
+        tcg_gen_ld_i32(sp_budget, simpoint_budget_ptr(), 0);
+        tcg_gen_sub_i32(sp_budget, sp_budget, tcg_constant_i32(0));
+        simpoint_start_insn = tcg_last_op();
+        tcg_gen_brcondi_i32(TCG_COND_LT, sp_budget, 0,
+                            tcg_ctx->exitreq_label);
+    } else {
+        simpoint_start_insn = NULL;
+    }
+#endif
+
     if (tb_cflags(tb) & CF_USE_ICOUNT) {
         tcg_gen_st16_i32(count, cpu_env,
                          offsetof(ArchCPU, neg.icount_decr.u16.low) -
@@ -66,7 +111,19 @@ static inline void gen_tb_start(const TranslationBlock *tb)
         gen_io_end();
     }
 
+#ifdef CONFIG_TCG_LOG_INSTR
+    if (simpoint_count) {
+        tcg_gen_st_i32(sp_budget, simpoint_budget_ptr(), 0);
+        tcg_temp_free_i32(sp_budget);
+    }
+#endif
+
     tcg_temp_free_i32(count);
+}
+
+static inline void gen_tb_start(const TranslationBlock *tb)
+{
+    gen_tb_start_simpoint(tb, false);
 }
 
 static inline void gen_tb_end(const TranslationBlock *tb, int num_insns)
@@ -79,6 +136,13 @@ static inline void gen_tb_end(const TranslationBlock *tb, int num_insns)
         tcg_set_insn_param(icount_start_insn, 2,
                            tcgv_i32_arg(tcg_constant_i32(num_insns)));
     }
+#ifdef CONFIG_TCG_LOG_INSTR
+    if (simpoint_start_insn) {
+        tcg_set_insn_param(simpoint_start_insn, 2,
+                           tcgv_i32_arg(tcg_constant_i32(num_insns)));
+        simpoint_start_insn = NULL;
+    }
+#endif
 
     gen_set_label(tcg_ctx->exitreq_label);
     tcg_gen_exit_tb(tb, TB_EXIT_REQUESTED);

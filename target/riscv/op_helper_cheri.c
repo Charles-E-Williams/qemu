@@ -380,6 +380,13 @@ static target_ulong sc_c_impl(CPUArchState *env, uint32_t addr_reg,
             "Should have raised EXCP_ATOMIC"));
     const cap_register_t *cbp = get_load_store_base_cap(env, addr_reg);
 
+#if defined(CONFIG_TCG_LOG_INSTR)
+    /* Record the authorizing capability, as lr_c_impl/amoswap_cap do. */
+    if (qemu_log_instr_enabled(env)) {
+        qemu_log_instr_mem_auth_cap(env, cbp, addr_reg);
+    }
+#endif
+
     if (!cbp->cr_tag) {
         raise_cheri_exception(env, CapEx_TagViolation, addr_reg);
     } else if (!cap_is_unsealed(cbp)) {
@@ -431,6 +438,16 @@ static target_ulong sc_c_impl(CPUArchState *env, uint32_t addr_reg,
     bool current_tag =
         load_cap_from_memory_raw(env, &current_pesbt, &current_cursor, addr_reg,
                                  cbp, addr, _host_return_address, NULL);
+#if defined(CONFIG_TCG_LOG_INSTR)
+    /*
+     * The compare-read is how QEMU emulates the reservation check, not an
+     * architectural access: keep it out of the instruction trace so SC.C
+     * shows only its store (or no access at all if it fails).
+     */
+    if (qemu_log_instr_enabled(env)) {
+        qemu_log_instr_drop_last_mem(env);
+    }
+#endif
 #ifdef CONFIG_RVFI_DII
     /* The read that is part of the cmpxchg should not be visible in traces. */
     env->rvfi_dii_trace.MEM.rvfi_mem_rmask = old_rmask;

@@ -180,6 +180,23 @@ static struct {
     bool     stop;
     bool     file_open;
     simpoint_mode_t mode;
+    /*
+     * COUNTING mode bookkeeping. Generated code decrements the 32-bit
+     * qemu_simpoint_budget at the start of every user-mode TB; anything
+     * beyond 32 bits waits in budget_reserve. The instruction count at
+     * which budget + reserve reaches zero is budget_target, so the current
+     * count is budget_target - budget_reserve - qemu_simpoint_budget.
+     */
+    uint64_t budget_target;
+    uint64_t budget_reserve;
+    /*
+     * Instructions that raised a synchronous exception inside the current
+     * traced window. They are neither traced nor counted in the window (so
+     * a window of N instructions yields exactly N trace entries), and are
+     * added back to instr_count when the window ends so later simpoints
+     * stay aligned with the BBV instruction counts.
+     */
+    uint64_t window_faults;
 } sp_state = { .current_idx = -1, .mode = SIMPOINT_MODE_INACTIVE};
 
 typedef struct {

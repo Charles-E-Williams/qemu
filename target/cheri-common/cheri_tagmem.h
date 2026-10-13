@@ -88,5 +88,7 @@ void *cheri_tagmem_for_addr(CPUArchState *env, target_ulong vaddr,
  * Fetch a single tag for use by the debug stub.
  */
 bool cheri_tag_get_debug(RAMBlock *ram, ram_addr_t ram_offset);
+bool cheri_tag_read_phys_page(CPUState *cs, hwaddr page_pa,
+                              unsigned long *tags, uint8_t **host);
 
 #endif /* TARGET_CHERI */

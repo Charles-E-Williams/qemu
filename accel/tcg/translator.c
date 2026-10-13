@@ -82,8 +82,19 @@ void translator_loop(const TranslatorOps *ops, DisasContextBase *db,
     /* Reset the temp count so that we can identify leaks */
     tcg_clear_temp_count();
 
-    /* Start translating.  */
+    /*
+     * Start translating. In SimPoint COUNTING mode user-mode TBs carry an
+     * inline budget check instead of returning to the main loop after
+     * every TB. The privilege level is part of the TB flags, so deciding
+     * this at translation time is safe.
+     */
+#ifdef CONFIG_TCG_LOG_INSTR
+    gen_tb_start_simpoint(db->tb,
+                          qemu_simpoint_tb_counts(cpu->env_ptr,
+                                                  tb_cflags(db->tb)));
+#else
     gen_tb_start(db->tb);
+#endif
 #ifdef CONFIG_DEBUG_TCG
     // On TB entry pc is up-to-date.
     if (_pc_is_current) {

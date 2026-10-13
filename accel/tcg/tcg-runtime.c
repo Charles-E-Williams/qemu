@@ -158,9 +158,12 @@ const void *HELPER(lookup_tb_ptr)(CPUArchState *env)
     uint32_t cheri_flags = 0;
     uint32_t flags;
 
-    /* Force return to cpu_tb_exec so per-TB simpoint counting fires */
-    /* This effectively disables TB-chaning during counting mode */
-    if (unlikely(qemu_simpoint_counting_active())) {
+    /*
+     * While waiting for / stepping to START_PC every TB must go back
+     * through cpu_tb_exec(). COUNTING mode counts inline, so indirect
+     * jumps stay chained there.
+     */
+    if (unlikely(qemu_simpoint_unchained_mode())) {
         return tcg_code_gen_epilogue;
     }
 

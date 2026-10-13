@@ -920,6 +920,99 @@ static void raise_mmu_exception(CPURISCVState *env, target_ulong address,
     env->two_stage_lookup = two_stage;
 }
 
+/*
+ * Physical address in a PTE. The top ten bits are not part of the PPN
+ * (CHERI uses some for PTE_CW/CR/CD/...), as in get_physical_address().
+ */
+static inline hwaddr riscv_pte_to_pa(target_ulong pte)
+{
+    return ((pte & ~0xFFC0000000000000ULL) >> PTE_PPN_SHIFT) << TARGET_PAGE_BITS;
+}
+
+/* Walk one non-root page-table level, see riscv_cpu_for_each_user_page. */
+static void riscv_walk_user_ptes(CPUState *cs, hwaddr table, int level,
+                                 target_ulong va_base,
+                                 riscv_user_page_cb cb, void *opaque)
+{
+    int nentries = 1 << 9;
+    int shift = TARGET_PAGE_BITS + 9 * level;
+
+    for (int i = 0; i < nentries; i++) {
+        target_ulong pte = address_space_ldq(cs->as, table + i * 8,
+                                             MEMTXATTRS_UNSPECIFIED, NULL);
+        target_ulong va = va_base | ((target_ulong)i << shift);
+
+        if (!(pte & PTE_V)) {
+            continue;
+        }
+        hwaddr pa = riscv_pte_to_pa(pte);
+        if (!(pte & (PTE_R | PTE_W | PTE_X))) {
+            if (level > 0) {
+                riscv_walk_user_ptes(cs, pa, level - 1, va, cb, opaque);
+            }
+            continue;
+        }
+        if (!(pte & PTE_U)) {
+            continue;
+        }
+        /* Leaf (possibly a superpage): report each 4 KiB page. */
+        target_ulong npages = (target_ulong)1 << (9 * level);
+        for (target_ulong p = 0; p < npages; p++) {
+            cb(opaque, va + p * TARGET_PAGE_SIZE, pa + p * TARGET_PAGE_SIZE);
+        }
+    }
+}
+
+/*
+ * Call @cb for every 4 KiB user page (PTE_U leaf at any level; superpages
+ * are split into 4 KiB pages) mapped by the current satp, in ascending VA
+ * order. Only the lower (user) half of the address space is walked.
+ * Returns false if paging is off or the mode is unsupported.
+ */
+bool riscv_cpu_for_each_user_page(CPURISCVState *env, riscv_user_page_cb cb,
+                                  void *opaque)
+{
+    CPUState *cs = env_cpu(env);
+    int levels;
+
+    switch (get_field(env->satp, SATP64_MODE)) {
+    case VM_1_10_SV39:
+        levels = 3;
+        break;
+    case VM_1_10_SV48:
+        levels = 4;
+        break;
+    default:
+        return false;
+    }
+
+    hwaddr root = (env->satp & SATP64_PPN) << TARGET_PAGE_BITS;
+    int top = levels - 1;
+    int shift = TARGET_PAGE_BITS + 9 * top;
+
+    /* User half: root indices whose VA has the sign bit clear. */
+    for (int i = 0; i < (1 << 8); i++) {
+        target_ulong pte = address_space_ldq(cs->as, root + i * 8,
+                                             MEMTXATTRS_UNSPECIFIED, NULL);
+        target_ulong va = (target_ulong)i << shift;
+
+        if (!(pte & PTE_V)) {
+            continue;
+        }
+        hwaddr pa = riscv_pte_to_pa(pte);
+        if (!(pte & (PTE_R | PTE_W | PTE_X))) {
+            riscv_walk_user_ptes(cs, pa, top - 1, va, cb, opaque);
+        } else if (pte & PTE_U) {
+            target_ulong npages = (target_ulong)1 << (9 * top);
+            for (target_ulong p = 0; p < npages; p++) {
+                cb(opaque, va + p * TARGET_PAGE_SIZE,
+                   pa + p * TARGET_PAGE_SIZE);
+            }
+        }
+    }
+    return true;
+}
+
 hwaddr riscv_cpu_get_phys_page_debug(CPUState *cs, vaddr addr)
 {
     RISCVCPU *cpu = RISCV_CPU(cs);
