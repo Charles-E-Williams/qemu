@@ -633,9 +633,11 @@ void riscv_cpu_set_force_hs_excep(CPURISCVState *env, bool enable);
 bool riscv_cpu_two_stage_lookup(int mmu_idx);
 int riscv_cpu_mmu_index(CPURISCVState *env, bool ifetch);
 hwaddr riscv_cpu_get_phys_page_debug(CPUState *cpu, vaddr addr);
+#ifdef TARGET_RISCV64
 typedef void (*riscv_user_page_cb)(void *opaque, target_ulong va, hwaddr pa);
 bool riscv_cpu_for_each_user_page(CPURISCVState *env, riscv_user_page_cb cb,
                                   void *opaque);
+#endif
 #ifdef TARGET_CHERI
 hwaddr cpu_riscv_translate_address_tagmem(CPURISCVState *env,
                                           target_ulong address,

@@ -681,13 +681,11 @@ static uint8_t remap_regid(uint8_t reg, LogRegType type)
     const uint8_t TRANSLATED_REG_IP    = 66;
     const uint8_t TRANSLATED_REG_SP    = 67;
     const uint8_t TRANSLATED_REG_FLAGS = 68;
-    const uint8_t TRANSLATED_X0 = 69;
 
     switch (type) {
         case LOG_REG_TYPE_GPR:
         case LOG_REG_TYPE_CAP:
             switch (reg) {
-            case 0: return TRANSLATED_X0;  // c0 and X0
             case 2: return REG_STACK_POINTER;  // x2/sp
             case REG_STACK_POINTER: return TRANSLATED_REG_SP;
             case REG_FLAGS: return TRANSLATED_REG_FLAGS;
@@ -968,6 +966,7 @@ static void emit_champsim_cheri_stop(CPUArchState *env, target_ulong pc)
  * Each mapping is reported at its own VA, so a physical page mapped twice
  * appears under both addresses.
  */
+#ifdef TARGET_RISCV64
 typedef struct {
     CPUState *cs;
     FILE *logfile;
@@ -1010,10 +1009,11 @@ static void cap_snapshot_page(void *opaque, target_ulong va, hwaddr pa)
         st->caps++;
     }
 }
+#endif /* TARGET_RISCV64 */
 
 static void write_cap_snapshot_header(CPUArchState *env)
 {
-#ifdef TARGET_RISCV
+#ifdef TARGET_RISCV64
     cap_snapshot_state_t st = { .cs = env_cpu(env) };
 
     st.logfile = qemu_log_lock();

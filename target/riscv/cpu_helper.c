@@ -920,6 +920,7 @@ static void raise_mmu_exception(CPURISCVState *env, target_ulong address,
     env->two_stage_lookup = two_stage;
 }
 
+#ifdef TARGET_RISCV64
 /*
  * Physical address in a PTE. The top ten bits are not part of the PPN
  * (CHERI uses some for PTE_CW/CR/CD/...), as in get_physical_address().
@@ -1012,6 +1013,7 @@ bool riscv_cpu_for_each_user_page(CPURISCVState *env, riscv_user_page_cb cb,
     }
     return true;
 }
+#endif /* TARGET_RISCV64 */
 
 hwaddr riscv_cpu_get_phys_page_debug(CPUState *cs, vaddr addr)
 {
