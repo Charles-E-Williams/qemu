@@ -134,6 +134,18 @@ static void track_interval_start(unsigned int cpu_index, void *udata)
 }
 
 
+/*
+ * The one regular (non-inline) callback per executed TB: the interval-start
+ * bookkeeping and the interval check used to be two separate callbacks, i.e.
+ * two calls out of generated code per TB. Same order, same behaviour.
+ */
+static void tb_exec(unsigned int cpu_index, void *udata)
+{
+    track_interval_start(cpu_index, udata);
+    check_interval(cpu_index, NULL);
+}
+
+
 static void check_stop(unsigned int cpu_index, void *udata)
 {
     uint64_t pc = (uint64_t)(uintptr_t)udata;
@@ -179,7 +191,8 @@ static void tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
         }
     }
     
-    if (stop_pc != 0) {
+    /* check_stop only acts on the TB that starts at stop_pc. */
+    if (stop_pc != 0 && pc == stop_pc) {
         qemu_plugin_register_vcpu_tb_exec_cb(tb, check_stop,
                                              QEMU_PLUGIN_CB_NO_REGS,
                                              (void *)(uintptr_t)pc);
@@ -198,7 +211,7 @@ static void tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
         g_hash_table_insert(bb_table, &bb->pc, bb);
     }
     
-    qemu_plugin_register_vcpu_tb_exec_cb(tb, track_interval_start,
+    qemu_plugin_register_vcpu_tb_exec_cb(tb, tb_exec,
                                          QEMU_PLUGIN_CB_NO_REGS, bb);
     
     qemu_plugin_register_vcpu_tb_exec_inline(tb, QEMU_PLUGIN_INLINE_ADD_U64,
@@ -211,9 +224,6 @@ static void tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
                                              &inst_count, n_insns);
     qemu_plugin_register_vcpu_tb_exec_inline(tb, QEMU_PLUGIN_INLINE_ADD_U64,
                                              &total_inst_count, n_insns);
-    
-    qemu_plugin_register_vcpu_tb_exec_cb(tb, check_interval,
-                                         QEMU_PLUGIN_CB_NO_REGS, NULL);
 }
 
 static void plugin_exit(qemu_plugin_id_t id, void *p)
