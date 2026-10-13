@@ -26,6 +26,25 @@
 #include "exec/helper-proto.h"
 #include "exec/helper-gen.h"
 
+#ifdef CONFIG_TCG_LOG_INSTR
+/*
+ * Register-dependency logging (for the ChampSim trace formats) is only
+ * useful in TBs that log instructions; elsewhere the helper call would just
+ * check that logging is off and return, once or more per instruction.
+ * Emit it only into logging TBs (same per-TB decision as the commit calls).
+ */
+#define gen_helper_qemu_log_reg_src(...)                                       \
+    do {                                                                       \
+        if (unlikely(tcg_ctx->log_instr_enabled))                              \
+            (gen_helper_qemu_log_reg_src)(__VA_ARGS__);                        \
+    } while (0)
+#define gen_helper_qemu_log_reg_dst(...)                                       \
+    do {                                                                       \
+        if (unlikely(tcg_ctx->log_instr_enabled))                              \
+            (gen_helper_qemu_log_reg_dst)(__VA_ARGS__);                        \
+    } while (0)
+#endif
+
 #include "exec/translator.h"
 #include "exec/log.h"
 #include "exec/log_instr.h"

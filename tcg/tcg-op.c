@@ -44,7 +44,12 @@ extern TCGv_i32 TCGV_HIGH_link_error(TCGv_i64);
 #define TCGV_HIGH TCGV_HIGH_link_error
 #endif
 
-#define tcg_ctx_logging_enabled (unlikely(tcg_ctx->tb_cflags & CF_LOG_INSTR))
+/*
+ * Is the TB being translated logging instructions? This is the same
+ * per-TB decision translator_loop uses for its commit calls (the old
+ * CF_LOG_INSTR test never fired: that flag is only set once at startup).
+ */
+#define tcg_ctx_logging_enabled (unlikely(tcg_ctx->log_instr_enabled))
 
 void tcg_gen_op1(TCGOpcode opc, TCGArg a1)
 {
@@ -2901,9 +2906,9 @@ void tcg_gen_qemu_ld_i32_with_checked_addr(TCGv_i32 val, TCGv_cap_checked_ptr ad
     }
 #if defined(CONFIG_TCG_LOG_INSTR)
     TCGv_i32 tcoi = tcg_const_i32(make_memop_idx(memop, idx));
- //   if (tcg_ctx_logging_enabled) {
+    if (tcg_ctx_logging_enabled) {
         gen_helper_qemu_log_instr_load32(cpu_env, saved_load_addr, val, tcoi);
-  //  }
+    }
     tcg_temp_free_i32(tcoi);
     // Free the saved address if we needed it
     if (saved_load_addr != addr)
@@ -2966,9 +2971,9 @@ static void tcg_gen_qemu_st_i32_with_checked_addr_cond_invalidate(
 #if defined(TARGET_CHERI) || defined(CONFIG_TCG_LOG_INSTR)
     TCGv_i32 tcoi = tcg_const_i32(make_memop_idx(memop, idx));
 #if defined(CONFIG_TCG_LOG_INSTR)
-  //  if (tcg_ctx_logging_enabled) {
+    if (tcg_ctx_logging_enabled) {
         gen_helper_qemu_log_instr_store32(cpu_env, addr, val, tcoi);
-   // }
+    }
 #endif
 #if defined(TARGET_CHERI)
     if (invalidate) {
@@ -3064,9 +3069,9 @@ void tcg_gen_qemu_ld_i64_with_checked_addr(TCGv_i64 val, TCGv_cap_checked_ptr ad
     }
 #if defined(CONFIG_TCG_LOG_INSTR)
     TCGv_i32 tcop = tcg_const_i32(memop);
-//    if (tcg_ctx_logging_enabled) {
+    if (tcg_ctx_logging_enabled) {
         gen_helper_qemu_log_instr_load64(cpu_env, saved_load_addr, val, tcop);
-//    }
+    }
     tcg_temp_free_i32(tcop);
     // Free the saved address if we needed it
     if (saved_load_addr != addr)
@@ -3121,9 +3126,9 @@ void tcg_gen_qemu_st_i64_with_checked_addr_cond_invalidate(
 #if defined(TARGET_CHERI) || defined(CONFIG_TCG_LOG_INSTR)
     TCGv_i32 tcoi = tcg_const_i32(make_memop_idx(memop, idx));
 #if defined(CONFIG_TCG_LOG_INSTR)
-   // if (tcg_ctx_logging_enabled) {
+    if (tcg_ctx_logging_enabled) {
         gen_helper_qemu_log_instr_store64(cpu_env, addr, val, tcoi);
- //   }
+    }
 #endif
 #if defined(TARGET_CHERI)
     if (invalidate) {

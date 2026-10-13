@@ -644,6 +644,12 @@ struct TCGContext {
 
     TCGRegSet reserved_regs;
     uint32_t tb_cflags; /* cflags of the current TB */
+    /*
+     * True while translating a TB that logs instructions (set by
+     * translator_loop). Instruction-logging helpers (registers, memory
+     * accesses) are only emitted into such TBs.
+     */
+    bool log_instr_enabled;
     intptr_t current_frame_offset;
     intptr_t frame_start;
     intptr_t frame_end;

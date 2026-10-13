@@ -77,6 +77,8 @@ void translator_loop(const TranslatorOps *ops, DisasContextBase *db,
      * log level changes.
      */
     db->log_instr_enabled = log_instr_enabled;
+    /* Lets generic code (tcg-op.c, target helpers) gate logging calls. */
+    tcg_ctx->log_instr_enabled = log_instr_enabled;
 #endif /* CONFIG_TCG_LOG_INSTR */
 
     /* Reset the temp count so that we can identify leaks */
@@ -225,6 +227,10 @@ void translator_loop(const TranslatorOps *ops, DisasContextBase *db,
     if (plugin_enabled) {
         plugin_gen_tb_end(cpu);
     }
+
+#ifdef CONFIG_TCG_LOG_INSTR
+    tcg_ctx->log_instr_enabled = false;
+#endif
 
     /* The disas_log hook may use these values rather than recompute.  */
     tb->size = db->pc_next - db->pc_first;
