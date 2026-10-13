@@ -752,6 +752,13 @@ static void emit_champsim_entry(CPUArchState *env, cpu_log_instr_info_t *iinfo)
                 trace.source_registers[0]      = REG_INSTRUCTION_POINTER;
                 trace.source_registers[1]      = remap_regid(iinfo->src_regs[0].reg_id, LOG_REG_TYPE_GPR);
                 trace.source_registers[2]      = remap_regid(iinfo->src_regs[1].reg_id, LOG_REG_TYPE_GPR);
+                /*
+                 * REG_FLAGS marks this as a conditional branch even when it
+                 * compares ra or sp (which would otherwise look like a return
+                 * or a stack op). Nothing writes REG_FLAGS (x25 is remapped),
+                 * so it adds no dependency.
+                 */
+                trace.source_registers[3]      = REG_FLAGS;
                 break;
 
             case BRANCH_DIRECT_CALL: 
@@ -771,6 +778,19 @@ static void emit_champsim_entry(CPUArchState *env, cpu_log_instr_info_t *iinfo)
                 trace.destination_registers[0] = REG_INSTRUCTION_POINTER;
                 trace.source_registers[0]      = REG_RETURN;
                 trace.source_registers[1]      = REG_INSTRUCTION_POINTER; 
+                break;
+
+            case BRANCH_CJAL:   /* capability-mode direct call */
+                trace.destination_registers[0] = REG_INSTRUCTION_POINTER;
+                trace.destination_registers[1] = remap_regid(iinfo->dst_regs[0].reg_id, LOG_REG_TYPE_CAP);
+                trace.source_registers[0]      = REG_INSTRUCTION_POINTER;
+                break;
+
+            case BRANCH_CJALR:  /* capability indirect call */
+                trace.destination_registers[0] = REG_INSTRUCTION_POINTER;
+                trace.destination_registers[1] = remap_regid(iinfo->dst_regs[0].reg_id, LOG_REG_TYPE_CAP);
+                trace.source_registers[0]      = REG_INSTRUCTION_POINTER;
+                trace.source_registers[1]      = remap_regid(iinfo->src_regs[0].reg_id, LOG_REG_TYPE_CAP);
                 break;
 
             case BRANCH_OTHER:
@@ -893,6 +913,13 @@ static void emit_champsim_cheri_entry(CPUArchState *env, cpu_log_instr_info_t *i
                 trace.source_registers[0]      = REG_INSTRUCTION_POINTER;
                 trace.source_registers[1]      = remap_regid(iinfo->src_regs[0].reg_id, LOG_REG_TYPE_GPR);
                 trace.source_registers[2]      = remap_regid(iinfo->src_regs[1].reg_id, LOG_REG_TYPE_GPR);
+                /*
+                 * REG_FLAGS marks this as a conditional branch even when it
+                 * compares ra or sp (which would otherwise look like a return
+                 * or a stack op). Nothing writes REG_FLAGS (x25 is remapped),
+                 * so it adds no dependency.
+                 */
+                trace.source_registers[3]      = REG_FLAGS;
                 break;
             case BRANCH_DIRECT_CALL:
                 trace.destination_registers[0] = REG_INSTRUCTION_POINTER;
@@ -2115,28 +2142,43 @@ void qemu_simpoint_count_tb(CPUArchState *env, target_ulong tb_pc,
     if (sp_state.mode != SIMPOINT_MODE_STEPPING_TO_START)
         return;
 
-    /* Walking through 1-insn TBs to find exact START_PC. */
-    if (tb_pc == START_PC) {
-        fprintf(stderr, "START_PC 0x%" PRIx64 " reached\n", START_PC);
-
-        sp_state.instr_count = 0;
-
-        /* Check if interval 0 is immediately a simpoint */
-        interval_match_t m = find_active_interval(0);
-        if (m.should_trace) {
-            simpoint_set_mode(env, SIMPOINT_MODE_TRACING);
-            simpoint_open_trace(env, m.idx, m.is_warmup);
-            sp_state.in_warmup   = m.is_warmup;
-            sp_state.current_idx = m.idx;
-            global_loglevel_enable();
-            cpu_loglevel_switch(env, QEMU_LOG_INSTR_LOGLEVEL_USER);
-        } else {
-            simpoint_set_mode(env, SIMPOINT_MODE_COUNTING);
-        }
-    } else {
-        /* Not there yet. Keep stepping */
+    /* Walking through 1-insn TBs to find exact START_PC; not there yet. */
+    if (tb_pc != START_PC) {
         cpu->cflags_next_tb = (curr_cflags(cpu) & ~CF_COUNT_MASK) | 1;
     }
+}
+
+/*
+ * Called before a TB executes. When the 1-insn stepping TB at START_PC is
+ * about to run, switch to COUNTING (or straight to TRACING) *before* it
+ * executes, so the START_PC instruction is instruction 0, as in the BBV
+ * plugin, which starts counting with the TB at the trigger PC. Returns true
+ * if the caller must exit the CPU loop so the TB is retranslated under the
+ * new mode (with the inline budget check, or with logging).
+ */
+bool qemu_simpoint_at_start_pc(CPUArchState *env, target_ulong tb_pc)
+{
+    if (sp_state.mode != SIMPOINT_MODE_STEPPING_TO_START ||
+        tb_pc != START_PC || !cpu_in_user_mode(env))
+        return false;
+
+    fprintf(stderr, "START_PC 0x%" PRIx64 " reached\n", START_PC);
+    sp_state.instr_count = 0;
+
+    /* Check if interval 0 is immediately a simpoint */
+    interval_match_t m = find_active_interval(0);
+    if (m.should_trace) {
+        simpoint_set_mode(env, SIMPOINT_MODE_TRACING);
+        simpoint_open_trace(env, m.idx, m.is_warmup);
+        sp_state.in_warmup   = m.is_warmup;
+        sp_state.current_idx = m.idx;
+        global_loglevel_enable();
+        cpu_loglevel_switch(env, QEMU_LOG_INSTR_LOGLEVEL_USER);
+        tb_flush(env_cpu(env));
+    } else {
+        simpoint_set_mode(env, SIMPOINT_MODE_COUNTING);
+    }
+    return true;
 }
 
 bool qemu_simpoint_unchained_mode(void)

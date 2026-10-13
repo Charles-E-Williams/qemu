@@ -370,6 +370,9 @@ bool qemu_simpoint_waiting_for_start_pc(target_ulong tb_pc, uint32_t tb_size);
 
 void qemu_simpoint_enter_stepping(CPUArchState *env);
 
+/* Before a TB runs: handle reaching START_PC; true = exit and retranslate. */
+bool qemu_simpoint_at_start_pc(CPUArchState *env, target_ulong tb_pc);
+
 /* Should the TB being translated carry the inline budget check? */
 bool qemu_simpoint_tb_counts(CPUArchState *env, uint32_t cflags);
 
@@ -412,6 +415,7 @@ static inline bool qemu_simpoint_unchained_mode(void) { return false; }
 static inline void qemu_simpoint_count_tb(CPUArchState *env, target_ulong tb_pc, uint64_t icount) {}
 static inline bool qemu_simpoint_waiting_for_start_pc(target_ulong tb_pc, uint32_t tb_size) { return false; }
 static inline void qemu_simpoint_enter_stepping(CPUArchState *env) {}
+static inline bool qemu_simpoint_at_start_pc(CPUArchState *env, target_ulong tb_pc) { return false; }
 static inline bool qemu_simpoint_tb_counts(CPUArchState *env, uint32_t cflags) { return false; }
 static inline bool qemu_simpoint_budget_exit(CPUState *cpu, struct TranslationBlock *tb) { return false; }
 static inline void qemu_log_instr_drop_last_mem(CPUArchState *env) {}

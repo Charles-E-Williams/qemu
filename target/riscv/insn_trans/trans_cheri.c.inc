@@ -462,6 +462,31 @@ static void gen_cjalr(DisasContext *ctx, int rd, int rs1, target_ulong imm)
 
 static bool trans_jalr_cap(DisasContext *ctx, arg_jalr_cap *a)
 {
+    /* Log like a capability-mode JALR (see trans_jalr). */
+    TCGv_i32 rs1 = tcg_const_i32(a->rs1);
+    TCGv_i32 type_cap = tcg_const_i32(LOG_REG_TYPE_CAP);
+    gen_helper_qemu_log_reg_src(cpu_env, rs1, type_cap);
+    tcg_temp_free_i32(rs1);
+    if (a->rd != 0) {
+        TCGv_i32 rd = tcg_const_i32(a->rd);
+        gen_helper_qemu_log_reg_dst(cpu_env, rd, type_cap);
+        tcg_temp_free_i32(rd);
+    }
+    tcg_temp_free_i32(type_cap);
+    if (qemu_ctx_logging_enabled(ctx)) {
+        TCGv_i32 taken = tcg_const_i32(1);
+        uint32_t type;
+
+        if (a->rd == 0) {
+            type = (a->rs1 == 1) ? BRANCH_RETURN : BRANCH_INDIRECT;
+        } else {
+            type = BRANCH_CJALR;
+        }
+        TCGv_i32 type_val = tcg_const_i32(type);
+        gen_helper_qemu_log_instr_branch(cpu_env, taken, type_val);
+        tcg_temp_free_i32(taken);
+        tcg_temp_free_i32(type_val);
+    }
     gen_cjalr(ctx, a->rd, a->rs1, 0);
     return true;
 }

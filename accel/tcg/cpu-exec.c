@@ -193,6 +193,10 @@ cpu_tb_exec(CPUState *cpu, TranslationBlock *itb, int *tb_exit)
         cpu_loop_exit(cpu);
     }
 
+    if (unlikely(qemu_simpoint_at_start_pc(env, itb->pc))) {
+        cpu_loop_exit(cpu);
+    }
+
     qemu_thread_jit_execute();
     ret = tcg_qemu_tb_exec(env, tb_ptr);
     cpu->can_do_io = 1;
