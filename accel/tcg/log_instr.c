@@ -1015,13 +1015,27 @@ static void write_cap_snapshot_header(CPUArchState *env)
 {
 #ifdef TARGET_RISCV64
     cap_snapshot_state_t st = { .cs = env_cpu(env) };
+    bool walked;
 
     st.logfile = qemu_log_lock();
     WITH_RCU_READ_LOCK_GUARD() {
-        if (!riscv_cpu_for_each_user_page(env, cap_snapshot_page, &st)) {
-            fprintf(stderr, "Pre-SimPoint capability snapshot skipped: "
-                    "paging is not enabled\n");
-        }
+        walked = riscv_cpu_for_each_user_page(env, cap_snapshot_page, &st);
+    }
+    qemu_log_unlock(st.logfile);
+
+    if (!walked) {
+        /*
+         * User code under CheriBSD always runs with Sv39/Sv48 paging. A
+         * trace without its capability header would look like "no tagged
+         * memory" to the simulator, so stop rather than write one.
+         */
+        qemu_log_flush();
+        fprintf(stderr, "FATAL: pre-SimPoint capability snapshot: user page "
+                "table not walkable (satp mode %u; only Sv39/Sv48 are "
+                "supported). Stopping instead of writing a trace without "
+                "its capability header.\n",
+                (unsigned)get_field(env->satp, SATP64_MODE));
+        exit(1);
     }
     qemu_log_unlock(st.logfile);
 
