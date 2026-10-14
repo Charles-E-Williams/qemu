@@ -1064,7 +1064,6 @@ static void write_cap_snapshot_header(CPUArchState *env)
                 (unsigned)get_field(env->satp, SATP64_MODE));
         exit(1);
     }
-    qemu_log_unlock(st.logfile);
 
     fprintf(stderr, "Pre-SimPoint capability snapshot: %" PRIu64
             " capabilities in %" PRIu64 " of %" PRIu64 " user pages\n",
