@@ -33,38 +33,38 @@ static inline void gen_io_end(void)
 }
 
 #ifdef CONFIG_TCG_LOG_INSTR
-/* SimPoint COUNTING budget, see include/exec/log_instr.h */
-#ifndef QEMU_SIMPOINT_BUDGET_DECLARED
-#define QEMU_SIMPOINT_BUDGET_DECLARED
-extern int32_t qemu_simpoint_budget;
+/* SimPoint COUNTING countdown, see include/exec/log_instr.h */
+#ifndef QEMU_SIMPOINT_COUNTDOWN_DECLARED
+#define QEMU_SIMPOINT_COUNTDOWN_DECLARED
+extern int32_t qemu_simpoint_countdown;
 #endif
-static TCGOp *simpoint_start_insn;
+static TCGOp *simpoint_countdown_sub_op;
 
 #if UINTPTR_MAX == UINT32_MAX
-# define simpoint_budget_ptr() \
-    ((TCGv_ptr)tcg_constant_i32((intptr_t)&qemu_simpoint_budget))
+# define simpoint_countdown_ptr() \
+    ((TCGv_ptr)tcg_constant_i32((intptr_t)&qemu_simpoint_countdown))
 #else
-# define simpoint_budget_ptr() \
-    ((TCGv_ptr)tcg_constant_i64((intptr_t)&qemu_simpoint_budget))
+# define simpoint_countdown_ptr() \
+    ((TCGv_ptr)tcg_constant_i64((intptr_t)&qemu_simpoint_countdown))
 #endif
 #endif
 
 /*
- * @simpoint_count: emit the SimPoint COUNTING budget check. Like icount,
+ * @emit_countdown: emit the SimPoint COUNTING countdown check. Like icount,
  * the TB's instruction count is subtracted up front (the immediate is
  * patched in gen_tb_end) and the TB exits with TB_EXIT_REQUESTED before
- * executing anything if the budget would go negative. Both checks run
- * before either counter is stored, so an exit never charges a TB that
+ * executing anything if the countdown would go negative. Both checks run
+ * before either counter is stored, so an exit never counts a TB that
  * did not execute. Direct and indirect TB chaining are unaffected.
  */
 static inline void gen_tb_start_simpoint(const TranslationBlock *tb,
-                                         bool simpoint_count)
+                                         bool emit_countdown)
 {
     TCGv_i32 count;
 #ifdef CONFIG_TCG_LOG_INSTR
-    TCGv_i32 sp_budget = NULL;
+    TCGv_i32 countdown = NULL;
 #else
-    tcg_debug_assert(!simpoint_count);
+    tcg_debug_assert(!emit_countdown);
 #endif
 
     tcg_ctx->exitreq_label = gen_new_label();
@@ -91,16 +91,16 @@ static inline void gen_tb_start_simpoint(const TranslationBlock *tb,
     tcg_gen_brcondi_i32(TCG_COND_LT, count, 0, tcg_ctx->exitreq_label);
 
 #ifdef CONFIG_TCG_LOG_INSTR
-    if (simpoint_count) {
+    if (emit_countdown) {
         /* Local temp: the value is stored after the branch below. */
-        sp_budget = tcg_temp_local_new_i32();
-        tcg_gen_ld_i32(sp_budget, simpoint_budget_ptr(), 0);
-        tcg_gen_sub_i32(sp_budget, sp_budget, tcg_constant_i32(0));
-        simpoint_start_insn = tcg_last_op();
-        tcg_gen_brcondi_i32(TCG_COND_LT, sp_budget, 0,
+        countdown = tcg_temp_local_new_i32();
+        tcg_gen_ld_i32(countdown, simpoint_countdown_ptr(), 0);
+        tcg_gen_sub_i32(countdown, countdown, tcg_constant_i32(0));
+        simpoint_countdown_sub_op = tcg_last_op();
+        tcg_gen_brcondi_i32(TCG_COND_LT, countdown, 0,
                             tcg_ctx->exitreq_label);
     } else {
-        simpoint_start_insn = NULL;
+        simpoint_countdown_sub_op = NULL;
     }
 #endif
 
@@ -112,9 +112,9 @@ static inline void gen_tb_start_simpoint(const TranslationBlock *tb,
     }
 
 #ifdef CONFIG_TCG_LOG_INSTR
-    if (simpoint_count) {
-        tcg_gen_st_i32(sp_budget, simpoint_budget_ptr(), 0);
-        tcg_temp_free_i32(sp_budget);
+    if (emit_countdown) {
+        tcg_gen_st_i32(countdown, simpoint_countdown_ptr(), 0);
+        tcg_temp_free_i32(countdown);
     }
 #endif
 
@@ -137,10 +137,10 @@ static inline void gen_tb_end(const TranslationBlock *tb, int num_insns)
                            tcgv_i32_arg(tcg_constant_i32(num_insns)));
     }
 #ifdef CONFIG_TCG_LOG_INSTR
-    if (simpoint_start_insn) {
-        tcg_set_insn_param(simpoint_start_insn, 2,
+    if (simpoint_countdown_sub_op) {
+        tcg_set_insn_param(simpoint_countdown_sub_op, 2,
                            tcgv_i32_arg(tcg_constant_i32(num_insns)));
-        simpoint_start_insn = NULL;
+        simpoint_countdown_sub_op = NULL;
     }
 #endif
 

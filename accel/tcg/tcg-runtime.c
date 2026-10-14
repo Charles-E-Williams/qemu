@@ -163,7 +163,7 @@ const void *HELPER(lookup_tb_ptr)(CPUArchState *env)
      * through cpu_tb_exec(). COUNTING mode counts inline, so indirect
      * jumps stay chained there.
      */
-    if (unlikely(qemu_simpoint_unchained_mode())) {
+    if (unlikely(qemu_simpoint_seeking_start_pc())) {
         return tcg_code_gen_epilogue;
     }
 

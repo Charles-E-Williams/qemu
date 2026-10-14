@@ -347,14 +347,14 @@ void qemu_log_instr_evt(CPUArchState *env, uint16_t fn, target_ulong arg0,
 void qemu_log_instr_extra(CPUArchState *env, const char *msg, ...);
 
 /*
- * Instructions left before the next SimPoint event in COUNTING mode.
+ * Instructions left before the next SimPoint stop in COUNTING mode.
  * Decremented by generated code at the start of each user-mode TB
  * (see gen_tb_start()); when a TB would take it below zero the TB exits
- * with TB_EXIT_REQUESTED and qemu_simpoint_budget_exit() takes over.
+ * with TB_EXIT_REQUESTED and qemu_simpoint_handle_countdown_exit() takes over.
  */
-#ifndef QEMU_SIMPOINT_BUDGET_DECLARED
-#define QEMU_SIMPOINT_BUDGET_DECLARED
-extern int32_t qemu_simpoint_budget;
+#ifndef QEMU_SIMPOINT_COUNTDOWN_DECLARED
+#define QEMU_SIMPOINT_COUNTDOWN_DECLARED
+extern int32_t qemu_simpoint_countdown;
 #endif
 
 /*
@@ -362,26 +362,29 @@ extern int32_t qemu_simpoint_budget;
  * (waiting for / stepping to START_PC), so TB chaining must stay off.
  * COUNTING mode keeps chaining enabled.
  */
-bool qemu_simpoint_unchained_mode(void);
+bool qemu_simpoint_seeking_start_pc(void);
 
-void qemu_simpoint_count_tb(CPUArchState *env, target_ulong tb_pc, uint64_t icount);
+/* After each TB while stepping: keep using 1-insn TBs until START_PC. */
+void qemu_simpoint_step_to_start_pc(CPUArchState *env, target_ulong tb_pc, uint64_t icount);
 
-bool qemu_simpoint_waiting_for_start_pc(target_ulong tb_pc, uint32_t tb_size);
+/* Waiting for START_PC and it lies inside this TB? */
+bool qemu_simpoint_tb_contains_start_pc(target_ulong tb_pc, uint32_t tb_size);
 
+/* Switch to 1-insn TBs to land exactly on START_PC. */
 void qemu_simpoint_enter_stepping(CPUArchState *env);
 
 /* Before a TB runs: handle reaching START_PC; true = exit and retranslate. */
 bool qemu_simpoint_at_start_pc(CPUArchState *env, target_ulong tb_pc);
 
-/* Should the TB being translated carry the inline budget check? */
-bool qemu_simpoint_tb_counts(CPUArchState *env, uint32_t cflags);
+/* Should the TB being translated carry the inline countdown check? */
+bool qemu_simpoint_tb_needs_countdown(CPUArchState *env, uint32_t cflags);
 
 /*
  * Called from the main loop when a TB exited with TB_EXIT_REQUESTED.
- * Returns true if the exit was caused by the SimPoint budget (and has
+ * Returns true if the exit was caused by the SimPoint countdown (and has
  * been handled: refill, step to the boundary, or start tracing).
  */
-bool qemu_simpoint_budget_exit(CPUState *cpu, struct TranslationBlock *tb);
+bool qemu_simpoint_handle_countdown_exit(CPUState *cpu, struct TranslationBlock *tb);
 
 /* Drop the last memory access recorded for the current instruction. */
 void qemu_log_instr_drop_last_mem(CPUArchState *env);
@@ -411,12 +414,12 @@ void qemu_log_instr_drop_last_mem(CPUArchState *env);
 #define qemu_log_gen_printf(...)
 #define qemu_log_gen_printf_flush(base, flush_early, force_flush)
 #define qemu_log_printf_create_globals(...)
-static inline bool qemu_simpoint_unchained_mode(void) { return false; }
-static inline void qemu_simpoint_count_tb(CPUArchState *env, target_ulong tb_pc, uint64_t icount) {}
-static inline bool qemu_simpoint_waiting_for_start_pc(target_ulong tb_pc, uint32_t tb_size) { return false; }
+static inline bool qemu_simpoint_seeking_start_pc(void) { return false; }
+static inline void qemu_simpoint_step_to_start_pc(CPUArchState *env, target_ulong tb_pc, uint64_t icount) {}
+static inline bool qemu_simpoint_tb_contains_start_pc(target_ulong tb_pc, uint32_t tb_size) { return false; }
 static inline void qemu_simpoint_enter_stepping(CPUArchState *env) {}
 static inline bool qemu_simpoint_at_start_pc(CPUArchState *env, target_ulong tb_pc) { return false; }
-static inline bool qemu_simpoint_tb_counts(CPUArchState *env, uint32_t cflags) { return false; }
-static inline bool qemu_simpoint_budget_exit(CPUState *cpu, struct TranslationBlock *tb) { return false; }
+static inline bool qemu_simpoint_tb_needs_countdown(CPUArchState *env, uint32_t cflags) { return false; }
+static inline bool qemu_simpoint_handle_countdown_exit(CPUState *cpu, struct TranslationBlock *tb) { return false; }
 static inline void qemu_log_instr_drop_last_mem(CPUArchState *env) {}
 #endif /* ! CONFIG_TCG_LOG_INSTR */

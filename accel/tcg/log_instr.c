@@ -1188,39 +1188,44 @@ static void cpu_loglevel_switch(CPUArchState *env, qemu_log_instr_loglevel_t lev
 static void global_loglevel_enable(void);
 
 /*
- * SimPoint COUNTING budget. Generated code subtracts each user-mode TB's
- * instruction count at TB entry (gen_tb_start) and exits the TB instead
- * when it would go negative; see qemu_simpoint_budget_exit().
+ * COUNTING mode countdown: user instructions left before the next stop
+ * (simpoint start, progress report or shutdown). Generated code subtracts
+ * each user-mode TB's instruction count at TB entry (gen_tb_start) and exits
+ * the TB instead when it would go negative; see
+ * qemu_simpoint_handle_countdown_exit().
  */
-int32_t qemu_simpoint_budget = INT32_MAX;
+int32_t qemu_simpoint_countdown = INT32_MAX;
 
 /* Current user instruction count while in COUNTING mode. */
-static uint64_t simpoint_counting_count(void)
+static uint64_t simpoint_current_insn_count(void)
 {
-    return sp_state.budget_target - sp_state.budget_reserve -
-           (uint64_t)qatomic_read(&qemu_simpoint_budget);
+    return sp_state.next_stop - sp_state.countdown_overflow -
+           (uint64_t)qatomic_read(&qemu_simpoint_countdown);
 }
 
-/* Put @remaining instructions in the 32-bit budget, the rest in reserve. */
-static void simpoint_load_budget(uint64_t remaining)
+/*
+ * Set the countdown to @remaining: up to INT32_MAX in the 32-bit counter,
+ * the rest in countdown_overflow.
+ */
+static void simpoint_set_countdown(uint64_t remaining)
 {
     int32_t chunk = remaining > INT32_MAX ? INT32_MAX : (int32_t)remaining;
 
-    sp_state.budget_reserve = remaining - chunk;
-    qatomic_set(&qemu_simpoint_budget, chunk);
+    sp_state.countdown_overflow = remaining - chunk;
+    qatomic_set(&qemu_simpoint_countdown, chunk);
 }
 
-/* Charge @n executed user instructions that bypassed the inline check. */
-static void simpoint_charge_insns(uint64_t n)
+/* Subtract @n user instructions that ran without the inline check. */
+static void simpoint_countdown_subtract(uint64_t n)
 {
-    uint64_t remaining = (uint64_t)qatomic_read(&qemu_simpoint_budget) +
-                         sp_state.budget_reserve;
+    uint64_t remaining = (uint64_t)qatomic_read(&qemu_simpoint_countdown) +
+                         sp_state.countdown_overflow;
 
-    simpoint_load_budget(remaining > n ? remaining - n : 0);
+    simpoint_set_countdown(remaining > n ? remaining - n : 0);
 }
 
 /* One past the end of the last simpoint interval (shutdown point). */
-static uint64_t simpoint_last_end(void)
+static uint64_t simpoint_end_of_last_interval(void)
 {
     uint64_t last = 0;
 
@@ -1231,18 +1236,38 @@ static uint64_t simpoint_last_end(void)
 }
 
 /*
- * Arm the budget for the next event after @count user instructions: the
- * next (warmup-adjusted) simpoint start, or the shutdown point after the
- * last simpoint. If @count is already inside an interval, fire at once.
+ * Progress reporting. Between simpoints (COUNTING mode, no tracing) this
+ * prints once per INTERVAL_SIZE user instructions: every interval boundary
+ * is scheduled as a stop, which costs one exit to the main loop per
+ * interval. A traced window prints every SIMPOINT_TRACE_PROGRESS_STEPS-th
+ * of the window.
  */
-static void simpoint_arm_budget(uint64_t count)
+#define SIMPOINT_TRACE_PROGRESS_STEPS 10
+
+static void simpoint_progress(const char *phase, uint64_t count)
+{
+    fprintf(stderr, "[simpoint] %-12s %" PRIu64 " insns (interval %" PRIu64
+            " of %" PRIu64 ")\n",
+            phase, count, count / INTERVAL_SIZE,
+            simpoint_end_of_last_interval() / INTERVAL_SIZE);
+}
+
+/*
+ * Set the countdown so execution stops at the next event after @count user
+ * instructions: the next (warmup-adjusted) simpoint start, the shutdown
+ * point after the last simpoint, or the next interval boundary (progress
+ * report), whichever comes first. If @count is already inside an interval,
+ * stop at once.
+ */
+static void simpoint_schedule_next_stop(uint64_t count)
 {
     uint64_t target;
 
     if (find_active_interval(count).should_trace) {
         target = count;
     } else {
-        uint64_t last_end = simpoint_last_end();
+        uint64_t last_end = simpoint_end_of_last_interval();
+        uint64_t next_tick = (count / INTERVAL_SIZE + 1) * INTERVAL_SIZE;
 
         target = count > last_end ? count : last_end + 1;
         for (int i = 0; i < adjusted_simpoints->len; i++) {
@@ -1251,15 +1276,18 @@ static void simpoint_arm_budget(uint64_t count)
                 target = adj;
             }
         }
+        if (next_tick < target) {
+            target = next_tick;
+        }
     }
 
-    sp_state.budget_target = target;
-    simpoint_load_budget(target - count);
+    sp_state.next_stop = target;
+    simpoint_set_countdown(target - count);
 }
 
 /*
- * All SimPoint mode changes go through here so CF_SIMPOINT_COUNT (and
- * with it the inline budget check) is on exactly while in COUNTING mode.
+ * All SimPoint mode changes go through here so CF_SIMPOINT_COUNTDOWN (and
+ * with it the inline countdown check) is on exactly while in COUNTING mode.
  * Because the bit is part of the TB lookup key, TBs translated with and
  * without the check are never mixed up, flush or no flush.
  */
@@ -1270,7 +1298,7 @@ static void simpoint_set_mode(CPUArchState *env, simpoint_mode_t mode)
 
     if (sp_state.mode == SIMPOINT_MODE_COUNTING &&
         mode != SIMPOINT_MODE_COUNTING && simpoints) {
-        sp_state.instr_count = simpoint_counting_count();
+        sp_state.instr_count = simpoint_current_insn_count();
     }
 
     /*
@@ -1289,17 +1317,17 @@ static void simpoint_set_mode(CPUArchState *env, simpoint_mode_t mode)
     sp_state.mode = mode;
 
     if (counting) {
-        simpoint_arm_budget(sp_state.instr_count);
+        simpoint_schedule_next_stop(sp_state.instr_count);
     } else {
-        qatomic_set(&qemu_simpoint_budget, INT32_MAX);
-        sp_state.budget_reserve = 0;
+        qatomic_set(&qemu_simpoint_countdown, INT32_MAX);
+        sp_state.countdown_overflow = 0;
     }
 
     CPU_FOREACH(cpu) {
         if (counting) {
-            cpu->tcg_cflags |= CF_SIMPOINT_COUNT;
+            cpu->tcg_cflags |= CF_SIMPOINT_COUNTDOWN;
         } else {
-            cpu->tcg_cflags &= ~CF_SIMPOINT_COUNT;
+            cpu->tcg_cflags &= ~CF_SIMPOINT_COUNTDOWN;
         }
     }
 }
@@ -1375,7 +1403,24 @@ static bool handle_interval_simpoints(CPUArchState *env, cpu_log_instr_info_t *i
                     sp_state.current_idx);
             sp_state.in_warmup = false;
         }
- 
+
+        /* Progress through the traced window (warmup included). */
+        {
+            uint64_t adj = g_array_index(adjusted_simpoints, uint64_t, m.idx);
+            uint64_t end = g_array_index(simpoints, uint64_t, m.idx) +
+                           INTERVAL_SIZE;
+            uint64_t step = MAX((end - adj) / SIMPOINT_TRACE_PROGRESS_STEPS, 1);
+            uint64_t done = sp_state.instr_count - adj;
+
+            if (done % step == 0 && done < end - adj) {
+                char phase[32];
+                snprintf(phase, sizeof(phase), "%s sp%d %2" PRIu64 "%%",
+                         m.is_warmup ? "warmup" : "trace", m.idx,
+                         done * 100 / (end - adj));
+                simpoint_progress(phase, sp_state.instr_count);
+            }
+        }
+
         return true;  /* emit this instruction */
  
     } else if (sp_state.mode == SIMPOINT_MODE_TRACING) {
@@ -1513,12 +1558,12 @@ static void do_instr_commit(CPUArchState *env)
         /*
          * A logging TB is still running just after a simpoint ended,
          * before the log-level switch and TB flush take effect. These
-         * instructions did execute, and such TBs carry no inline budget
-         * check (see qemu_simpoint_tb_counts), so charge them here using
-         * the same rule handle_interval_simpoints() uses.
+         * instructions did execute, and such TBs carry no inline countdown
+         * check (see qemu_simpoint_tb_needs_countdown), so subtract them
+         * here using the same rule handle_interval_simpoints() uses.
          */
         if (simpoints && simpoint_commit_is_user(env))
-            simpoint_charge_insns(1);
+            simpoint_countdown_subtract(1);
         return;
     }
     if (sp_state.mode == SIMPOINT_MODE_WAIT_START_PC || 
@@ -2127,10 +2172,10 @@ void qemu_log_instr_extra(CPUArchState *env, const char *msg, ...)
  * Main-loop hook while waiting for / stepping to START_PC.
  *
  * COUNTING mode no longer comes through here: user-mode TBs decrement
- * qemu_simpoint_budget inline (gen_tb_start) and TB chaining stays on.
- * See qemu_simpoint_budget_exit() for what happens at a boundary.
+ * qemu_simpoint_countdown inline (gen_tb_start) and TB chaining stays on.
+ * See qemu_simpoint_handle_countdown_exit() for what happens at a boundary.
  */
-void qemu_simpoint_count_tb(CPUArchState *env, target_ulong tb_pc,
+void qemu_simpoint_step_to_start_pc(CPUArchState *env, target_ulong tb_pc,
                             uint64_t icount)
 {
     CPUState *cpu = env_cpu(env);
@@ -2153,7 +2198,7 @@ void qemu_simpoint_count_tb(CPUArchState *env, target_ulong tb_pc,
  * executes, so the START_PC instruction is instruction 0, as in the BBV
  * plugin, which starts counting with the TB at the trigger PC. Returns true
  * if the caller must exit the CPU loop so the TB is retranslated under the
- * new mode (with the inline budget check, or with logging).
+ * new mode (with the inline countdown check, or with logging).
  */
 bool qemu_simpoint_at_start_pc(CPUArchState *env, target_ulong tb_pc)
 {
@@ -2180,7 +2225,7 @@ bool qemu_simpoint_at_start_pc(CPUArchState *env, target_ulong tb_pc)
     return true;
 }
 
-bool qemu_simpoint_unchained_mode(void)
+bool qemu_simpoint_seeking_start_pc(void)
 {
     return sp_state.mode == SIMPOINT_MODE_WAIT_START_PC ||
            sp_state.mode == SIMPOINT_MODE_STEPPING_TO_START;
@@ -2190,7 +2235,7 @@ bool qemu_simpoint_unchained_mode(void)
 * Some starting pcs may be in the middle of a translation block
 * so we check the range of START_PC to detect if we're approaching it
 */
-bool qemu_simpoint_waiting_for_start_pc(target_ulong tb_pc, uint32_t tb_size)
+bool qemu_simpoint_tb_contains_start_pc(target_ulong tb_pc, uint32_t tb_size)
 {
     return sp_state.mode == SIMPOINT_MODE_WAIT_START_PC &&
            tb_pc <= START_PC && START_PC < tb_pc + tb_size;
@@ -2213,29 +2258,30 @@ void qemu_simpoint_enter_stepping(CPUArchState *env)
 }
 
 /*
- * Translation-time decision: does this TB get the inline budget check?
- * CF_SIMPOINT_COUNT is only in the CPU's cflags while in COUNTING mode,
+ * Translation-time decision: does this TB get the inline countdown check?
+ * CF_SIMPOINT_COUNTDOWN is only in the CPU's cflags while in COUNTING mode,
  * and the privilege level is part of the TB flags, so a TB translated in
  * user mode only ever runs in user mode.
  */
-bool qemu_simpoint_tb_counts(CPUArchState *env, uint32_t cflags)
+bool qemu_simpoint_tb_needs_countdown(CPUArchState *env, uint32_t cflags)
 {
     /*
      * A TB that still logs (translated in the short window before the
      * log-level switch lands) is counted by its commits instead, so it
      * must not also get the inline check.
      */
-    return (cflags & CF_SIMPOINT_COUNT) && cpu_in_user_mode(env) &&
+    return (cflags & CF_SIMPOINT_COUNTDOWN) && cpu_in_user_mode(env) &&
            !qemu_log_instr_enabled(env);
 }
 
 /*
- * The budget reached zero: sp_state.budget_target user instructions have
- * executed. Start tracing, shut down, or (defensively) re-arm.
+ * The countdown reached zero: sp_state.next_stop user instructions have
+ * executed. Start tracing, shut down, or report progress and schedule the
+ * next stop.
  */
-static void simpoint_budget_event(CPUArchState *env)
+static void simpoint_reached_stop(CPUArchState *env)
 {
-    uint64_t count = sp_state.budget_target;
+    uint64_t count = sp_state.next_stop;
     interval_match_t m;
 
     sp_state.instr_count = count;
@@ -2262,7 +2308,7 @@ static void simpoint_budget_event(CPUArchState *env)
         cpu_loop_exit(env_cpu(env));
     }
 
-    if (count > simpoint_last_end()) {
+    if (count > simpoint_end_of_last_interval()) {
         fprintf(stderr,
             "All simpoints complete at icount=%" PRIu64
             ", shutting down\n", count);
@@ -2272,49 +2318,53 @@ static void simpoint_budget_event(CPUArchState *env)
         return;
     }
 
-    /* Not an event (should not happen); wait for the next one. */
-    simpoint_arm_budget(count);
+    /* Interval boundary between simpoints: report progress, keep going. */
+    if (count % INTERVAL_SIZE == 0) {
+        simpoint_progress("counting", count);
+    }
+    simpoint_schedule_next_stop(count);
 }
 
 /*
  * A TB exited with TB_EXIT_REQUESTED before executing anything. If that was
- * the inline budget check (budget < this TB's instruction count), handle it:
- *  - more budget in reserve: refill and retry the TB;
+ * the inline countdown check (countdown < this TB's instruction count),
+ * handle it:
+ *  - more left in countdown_overflow: refill and retry the TB;
  *  - boundary falls inside this TB: retranslate it to end exactly at the
  *    boundary (same idea as icount's cflags_next_tb);
- *  - budget is exactly zero: we are at the boundary, run the event.
+ *  - countdown is exactly zero: we are at the stop, handle it.
  */
-bool qemu_simpoint_budget_exit(CPUState *cpu, TranslationBlock *tb)
+bool qemu_simpoint_handle_countdown_exit(CPUState *cpu, TranslationBlock *tb)
 {
     CPUArchState *env = cpu->env_ptr;
-    int32_t budget = qatomic_read(&qemu_simpoint_budget);
+    int32_t countdown = qatomic_read(&qemu_simpoint_countdown);
     uint64_t remaining;
 
-    if (!(tb_cflags(tb) & CF_SIMPOINT_COUNT) || !cpu_in_user_mode(env) ||
-        (int64_t)budget >= (int64_t)tb->icount) {
+    if (!(tb_cflags(tb) & CF_SIMPOINT_COUNTDOWN) || !cpu_in_user_mode(env) ||
+        (int64_t)countdown >= (int64_t)tb->icount) {
         return false;
     }
 
     if (sp_state.mode != SIMPOINT_MODE_COUNTING) {
         /* Stale counting TB reached through an old chain; let it run. */
-        qatomic_set(&qemu_simpoint_budget, INT32_MAX);
+        qatomic_set(&qemu_simpoint_countdown, INT32_MAX);
         return true;
     }
 
-    remaining = (uint64_t)budget + sp_state.budget_reserve;
+    remaining = (uint64_t)countdown + sp_state.countdown_overflow;
 
     if (remaining >= tb->icount) {
-        simpoint_load_budget(remaining);
+        simpoint_set_countdown(remaining);
         return true;
     }
 
     if (remaining > 0) {
-        simpoint_load_budget(remaining);
+        simpoint_set_countdown(remaining);
         cpu->cflags_next_tb = (tb_cflags(tb) & ~CF_COUNT_MASK) | remaining;
         return true;
     }
 
-    simpoint_budget_event(env);
+    simpoint_reached_stop(env);
     return true;
 }
 
@@ -2819,6 +2869,7 @@ void helper_qemu_log_instr_simpoint_start(CPUArchState *env, target_ulong pc)
     sp_state.stop        = false;
     sp_state.file_open   = false;
 
+
     if (START_PC != 0) {
         simpoint_set_mode(env, SIMPOINT_MODE_WAIT_START_PC);
     } else {
@@ -2841,7 +2892,7 @@ void helper_qemu_log_instr_simpoint_stop(CPUArchState *env, target_ulong pc)
 {
     bool was_tracing = sp_state.mode == SIMPOINT_MODE_TRACING;
 
-    /* Leaving COUNTING mode syncs instr_count from the inline budget. */
+    /* Leaving COUNTING mode syncs instr_count from the inline countdown. */
     simpoint_set_mode(env, SIMPOINT_MODE_INACTIVE);
 
     fprintf(stderr, "Simpoint-aware tracing stopped (counted %" PRIu64 " instructions)\n",
