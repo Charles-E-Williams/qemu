@@ -386,6 +386,20 @@ size_t qemu_plugin_insn_size(const struct qemu_plugin_insn *insn);
 uint64_t qemu_plugin_insn_vaddr(const struct qemu_plugin_insn *insn);
 
 /**
+ * qemu_plugin_vcpu_page_table_root() - page-table root of a running vCPU
+ * @vcpu_index: vcpu index, as passed to vcpu callbacks
+ *
+ * Call this from a callback running on that vCPU. The value identifies
+ * the address space (process) the vCPU is currently executing in: all
+ * threads of a process share it, and it changes on every switch between
+ * processes.
+ *
+ * Returns: physical address of the current page-table root (RISC-V:
+ * satp.PPN << 12), or 0 if paging is off or the target has no support.
+ */
+uint64_t qemu_plugin_vcpu_page_table_root(unsigned int vcpu_index);
+
+/**
  * qemu_plugin_insn_haddr() - return hardware addr of instruction
  * @insn: opaque instruction handle from qemu_plugin_tb_get_insn()
  *

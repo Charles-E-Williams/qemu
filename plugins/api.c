@@ -229,6 +229,28 @@ void *qemu_plugin_insn_haddr(const struct qemu_plugin_insn *insn)
     return insn->haddr;
 }
 
+uint64_t qemu_plugin_vcpu_page_table_root(unsigned int vcpu_index)
+{
+#if defined(TARGET_RISCV) && !defined(CONFIG_USER_ONLY)
+    CPUState *cpu = current_cpu;
+    CPURISCVState *env;
+
+    if (!cpu || cpu->cpu_index != vcpu_index) {
+        cpu = qemu_get_cpu(vcpu_index);
+    }
+    if (!cpu) {
+        return 0;
+    }
+    env = &RISCV_CPU(cpu)->env;
+    if (riscv_cpu_is_32bit(env)) {
+        return (uint64_t)(env->satp & SATP32_PPN) << TARGET_PAGE_BITS;
+    }
+    return (uint64_t)(env->satp & SATP64_PPN) << TARGET_PAGE_BITS;
+#else
+    return 0;
+#endif
+}
+
 char *qemu_plugin_insn_disas(const struct qemu_plugin_insn *insn)
 {
     CPUState *cpu = current_cpu;

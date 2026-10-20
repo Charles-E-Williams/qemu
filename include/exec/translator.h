@@ -87,7 +87,27 @@ typedef struct DisasContextBase {
     bool log_instr_enabled;
     uint8_t printf_used_ptr;
 #endif
+    /*
+     * SimPoint: number of instructions of this TB that can retire, if the
+     * translator emitted an exception that is raised unconditionally (an
+     * illegal instruction, ecall/ebreak, a PCC check decided at translation
+     * time); -1 if none. The countdown and the BBVs charge only these.
+     */
+    int simpoint_retire_limit;
 } DisasContextBase;
+
+/*
+ * The instruction being translated (or, before the first one, the TB entry)
+ * raises an exception unconditionally and does not retire (illegal
+ * instruction, ecall, ebreak, PCC checks decided at translation time). Not
+ * for exceptions raised on a conditional path.
+ */
+static inline void translator_note_unretired(DisasContextBase *db)
+{
+    if (db->simpoint_retire_limit < 0) {
+        db->simpoint_retire_limit = db->num_insns > 0 ? db->num_insns - 1 : 0;
+    }
+}
 
 #ifdef TARGET_CHERI
 /**

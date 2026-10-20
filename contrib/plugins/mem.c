@@ -1,0 +1,235 @@
+/*
+ * Copyright (C) 2018, Emilio G. Cota <cota@braap.org>
+ * Modified for Start-PC conditional logging.
+ *
+ * License: GNU GPL, version 2 or later.
+ * See the COPYING file in the top-level directory.
+ */
+#include <inttypes.h>
+#include <assert.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <stdio.h>
+#include <glib.h>
+#include <sys/wait.h>
+#include <errno.h>
+
+#include <qemu-plugin.h>
+
+QEMU_PLUGIN_EXPORT int qemu_plugin_version = QEMU_PLUGIN_VERSION;
+
+static uint64_t inline_mem_count;
+static uint64_t cb_mem_count;
+static uint64_t io_count;
+static bool do_inline, do_callback;
+static bool do_haddr;
+static bool do_text;
+static bool do_xz;
+static gchar *out_path;
+static FILE *out_fp;
+static enum qemu_plugin_mem_rw rw = QEMU_PLUGIN_MEM_RW;
+
+// --- NEW VARIABLES FOR START-PC LOGIC ---
+static uint64_t start_pc = 0;
+static bool has_start_pc = false;
+static bool logging_enabled = true; // Defaults to true unless start-pc is provided
+
+static void plugin_exit(qemu_plugin_id_t id, void *p)
+{
+    g_autoptr(GString) out = g_string_new("");
+    g_autoptr(GError) err = NULL;
+
+    if (do_inline) {
+        g_string_printf(out, "inline mem accesses: %" PRIu64 "\n", inline_mem_count);
+    }
+    if (do_callback) {
+        g_string_append_printf(out, "callback mem accesses: %" PRIu64 "\n", cb_mem_count);
+    }
+    if (do_haddr) {
+        g_string_append_printf(out, "io accesses: %" PRIu64 "\n", io_count);
+    }
+    qemu_plugin_outs(out->str);
+
+    if (out_fp) {
+        int flush_errno = 0;
+        int close_errno = 0;
+
+        if (fflush(out_fp) != 0) {
+            flush_errno = errno;
+        }
+        if (fclose(out_fp) != 0) {
+            close_errno = errno;
+        }
+        if (flush_errno || close_errno) {
+            g_autofree gchar *msg = g_strdup_printf(
+                "failed to flush/close output '%s': flush=%s close=%s\n",
+                out_path ? out_path : "(null)",
+                flush_errno ? g_strerror(flush_errno) : "ok",
+                close_errno ? g_strerror(close_errno) : "ok");
+            qemu_plugin_outs(msg);
+        }
+        out_fp = NULL;
+    }
+    if (do_xz && out_path) {
+        int status = 0;
+        const gchar *argv[] = { "xz", "-f", "-z", out_path, NULL };
+        if (!g_spawn_sync(NULL, (gchar **)argv, NULL, G_SPAWN_SEARCH_PATH,
+                          NULL, NULL, NULL, NULL, &status, &err)) {
+            g_autofree gchar *msg = g_strdup_printf("xz compression failed: %s\n",
+                                                    err ? err->message : "unknown");
+            qemu_plugin_outs(msg);
+        } else if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+            g_autofree gchar *msg = g_strdup_printf(
+                "xz failed (status=0x%x, exit=%d, signal=%d)\n",
+                status,
+                WIFEXITED(status) ? WEXITSTATUS(status) : -1,
+                WIFSIGNALED(status) ? WTERMSIG(status) : -1);
+            qemu_plugin_outs(msg);
+        }
+    }
+    g_free(out_path);
+    out_path = NULL;
+}
+
+// --- NEW FUNCTION: THE EXECUTION TRIPWIRE ---
+static void vcpu_insn_exec(unsigned int cpu_index, void *udata)
+{
+    if (!logging_enabled) {
+        logging_enabled = true;
+        if (out_fp) {
+            fprintf(out_fp, "--- START PC HIT: 0x%" PRIx64 ". LOGGING ENABLED ---\n", start_pc);
+        }
+    }
+}
+
+static void vcpu_mem(unsigned int cpu_index, qemu_plugin_meminfo_t meminfo,
+                     uint64_t vaddr, void *udata)
+{
+    // --- NEW CHECK: ABORT IF WE HAVEN'T HIT START-PC YET ---
+    if (!logging_enabled) {
+        return; 
+    }
+
+    struct qemu_plugin_cheri_auth auth = { 0 };
+
+    if (do_haddr) {
+        struct qemu_plugin_hwaddr *hwaddr;
+        hwaddr = qemu_plugin_get_hwaddr(meminfo, vaddr);
+        if (qemu_plugin_hwaddr_is_io(hwaddr)) {
+            io_count++;
+        } else {
+            cb_mem_count++;
+        }
+    } else {
+        cb_mem_count++;
+    }
+
+    if (do_text && out_fp) {
+        // fprintf(out_fp, "cpu=%u %c vaddr=0x%" PRIx64 " size=%u",
+        //         cpu_index, qemu_plugin_mem_is_store(meminfo) ? 'W' : 'R',
+        //         vaddr, 1u << qemu_plugin_mem_size_shift(meminfo));
+        if (qemu_plugin_get_auth_cap(meminfo, &auth)) {
+            fprintf(out_fp,
+                    " auth_src=%s%u auth_tag=%u auth_perms=0x%x auth_base=0x%" PRIx64
+                    " auth_len=0x%" PRIx64 " auth_off=0x%" PRIx64,
+                    auth.is_ddc ? "DDC" : "c", auth.regnum, auth.tag,
+                    auth.perms, auth.base, auth.length, auth.offset);
+        }
+        struct qemu_plugin_cheri_transfer transferred_cap = { 0 };
+        if (qemu_plugin_mem_get_cap(meminfo, &transferred_cap)) {
+            fprintf(out_fp,
+                    " cap_tag=%u cap_perms=0x%x cap_base=0x%" PRIx64
+                    " cap_len=0x%" PRIx64 " cap_off=0x%" PRIx64,
+                    transferred_cap.tag, transferred_cap.perms,
+                    transferred_cap.base, transferred_cap.length,
+                    transferred_cap.offset);
+        }
+        // fputc('\n', out_fp);
+    }
+}
+
+static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
+{
+    size_t n = qemu_plugin_tb_n_insns(tb);
+    size_t i;
+
+    for (i = 0; i < n; i++) {
+        struct qemu_plugin_insn *insn = qemu_plugin_tb_get_insn(tb, i);
+        
+        // --- NEW LOGIC: INJECT TRIPWIRE AT TRANSLATION TIME ---
+        if (has_start_pc && !logging_enabled) {
+            uint64_t pc = qemu_plugin_insn_vaddr(insn);
+            if (pc == start_pc) {
+                // Attach our execution tripwire ONLY to this specific instruction
+                qemu_plugin_register_vcpu_insn_exec_cb(insn, vcpu_insn_exec,
+                                                       QEMU_PLUGIN_CB_NO_REGS, NULL);
+            }
+        }
+
+        if (do_inline) {
+            qemu_plugin_register_vcpu_mem_inline(insn, rw,
+                                                 QEMU_PLUGIN_INLINE_ADD_U64,
+                                                 &inline_mem_count, 1);
+        }
+        if (do_callback) {
+            qemu_plugin_register_vcpu_mem_cb(insn, vcpu_mem,
+                                             QEMU_PLUGIN_CB_NO_REGS,
+                                             rw, NULL);
+        }
+    }
+}
+
+QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
+                                           const qemu_info_t *info,
+                                           int argc, char **argv)
+{
+    for (int i = 0; i < argc; i++) {
+        const char *arg = argv[i];
+        if (!strcmp(arg, "haddr")) {
+            do_haddr = true;
+        } else if (!strcmp(arg, "text")) {
+            do_text = true;
+        } else if (!strcmp(arg, "xz")) {
+            do_xz = true;
+        } else if (!strncmp(arg, "out=", 4)) {
+            g_free(out_path);
+            out_path = g_strdup(arg + 4);
+        } else if (!strncmp(arg, "start-pc=", 9)) {
+            // --- NEW ARGUMENT PARSING ---
+            start_pc = strtoull(arg + 9, NULL, 16); // Parse hex string to uint64
+            has_start_pc = true;
+            logging_enabled = false; // Mute logging until the tripwire is hit
+        } else if (i == 1) {
+            if (!strcmp(arg, "r")) {
+                rw = QEMU_PLUGIN_MEM_R;
+            } else if (!strcmp(arg, "w")) {
+                rw = QEMU_PLUGIN_MEM_W;
+            }
+        }
+    }
+
+    if (argc && !strcmp(argv[0], "inline")) {
+        do_inline = true;
+        do_callback = false;
+    } else if (argc && !strcmp(argv[0], "both")) {
+        do_inline = true;
+        do_callback = true;
+    } else {
+        do_callback = true;
+    }
+
+    if (do_text && out_path) {
+        out_fp = fopen(out_path, "w");
+        if (!out_fp) {
+            g_autofree gchar *msg = g_strdup_printf("failed to open output '%s': %s\n",
+                                                    out_path, g_strerror(errno));
+            qemu_plugin_outs(msg);
+            return -1;
+        }
+    }
+
+    qemu_plugin_register_vcpu_tb_trans_cb(id, vcpu_tb_trans);
+    qemu_plugin_register_atexit_cb(id, plugin_exit, NULL);
+    return 0;
+}

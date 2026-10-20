@@ -48,6 +48,7 @@
 #include "tcg/tcg-op.h"
 #include "qapi/error.h"
 #include "sysemu/runstate.h"
+#include <zlib.h>
 
 /*
  * CHERI common instruction logging.
@@ -106,6 +107,13 @@ static GHashTable *pc_exec_count_map = NULL;
 
 extern uint64_t INTERVAL_SIZE;
 extern uint64_t START_PC; 
+extern bool SIMPOINT_PROCESS_FILTER;
+
+static simpoint_state_t sp_state = {
+    .current_idx = -1, .mode = SIMPOINT_MODE_INACTIVE
+};
+extern char *SIMPOINT_BBV_PATH;
+extern char *SIMPOINT_BBV_KEY;
 
 
 /*
@@ -1118,6 +1126,8 @@ static void reset_log_buffer(cpu_log_instr_state_t *cpulog,
     cpulog->starting = false;
 }
 
+static void global_loglevel_enable(void);
+
 static void simpoint_open_trace(CPUArchState *env, int idx, bool is_warmup)
 {
     char filename[256];
@@ -1126,7 +1136,16 @@ static void simpoint_open_trace(CPUArchState *env, int idx, bool is_warmup)
         qemu_log_close();
 
     snprintf(filename, sizeof(filename), "simpoint_%d.trace", idx);
-    qemu_set_log_filename(filename, &error_fatal);
+    /*
+     * Not qemu_set_log_filename(): that re-runs the global instruction
+     * log-level switch, which puts all CPUs in log level ALL. Windows
+     * entered by switching from an adjacent one (no later USER switch)
+     * were then traced with kernel-mode logging on: faulting user
+     * instructions logged as completed, with the trap handler's register
+     * writes attached. CPU_LOG_INSTR is set first so the file opens.
+     */
+    global_loglevel_enable();
+    qemu_log_switch_file(filename, &error_fatal);
     sp_state.file_open = true;
 
 #ifdef TARGET_CHERI
@@ -1185,7 +1204,6 @@ static interval_match_t find_active_interval(uint64_t instr_count)
 
 
 static void cpu_loglevel_switch(CPUArchState *env, qemu_log_instr_loglevel_t level);
-static void global_loglevel_enable(void);
 
 /*
  * COUNTING mode countdown: user instructions left before the next stop
@@ -1196,21 +1214,38 @@ static void global_loglevel_enable(void);
  */
 int32_t qemu_simpoint_countdown = INT32_MAX;
 
+/* Instructions left in the countdown (parked value while paused). */
+static uint64_t simpoint_countdown_remaining(void)
+{
+    if (sp_state.paused) {
+        return sp_state.paused_remaining;
+    }
+    return (uint64_t)qatomic_read(&qemu_simpoint_countdown) +
+           sp_state.countdown_overflow;
+}
+
 /* Current user instruction count while in COUNTING mode. */
 static uint64_t simpoint_current_insn_count(void)
 {
-    return sp_state.next_stop - sp_state.countdown_overflow -
-           (uint64_t)qatomic_read(&qemu_simpoint_countdown);
+    return sp_state.next_stop - simpoint_countdown_remaining();
 }
 
 /*
  * Set the countdown to @remaining: up to INT32_MAX in the 32-bit counter,
- * the rest in countdown_overflow.
+ * the rest in countdown_overflow. While paused (filter=process, another
+ * process is running) the value is parked instead and the live counter is
+ * set to INT32_MAX, so counting TBs run by other processes change nothing.
  */
 static void simpoint_set_countdown(uint64_t remaining)
 {
     int32_t chunk = remaining > INT32_MAX ? INT32_MAX : (int32_t)remaining;
 
+    if (sp_state.paused) {
+        sp_state.paused_remaining = remaining;
+        sp_state.countdown_overflow = 0;
+        qatomic_set(&qemu_simpoint_countdown, INT32_MAX);
+        return;
+    }
     sp_state.countdown_overflow = remaining - chunk;
     qatomic_set(&qemu_simpoint_countdown, chunk);
 }
@@ -1218,8 +1253,7 @@ static void simpoint_set_countdown(uint64_t remaining)
 /* Subtract @n user instructions that ran without the inline check. */
 static void simpoint_countdown_subtract(uint64_t n)
 {
-    uint64_t remaining = (uint64_t)qatomic_read(&qemu_simpoint_countdown) +
-                         sp_state.countdown_overflow;
+    uint64_t remaining = simpoint_countdown_remaining();
 
     simpoint_set_countdown(remaining > n ? remaining - n : 0);
 }
@@ -1244,12 +1278,319 @@ static uint64_t simpoint_end_of_last_interval(void)
  */
 #define SIMPOINT_TRACE_PROGRESS_STEPS 10
 
+static bool simpoint_bbv_mode(void);
+
 static void simpoint_progress(const char *phase, uint64_t count)
 {
+    if (simpoint_bbv_mode()) {
+        fprintf(stderr, "[simpoint] %-12s %" PRIu64 " insns (interval %"
+                PRIu64 ")\n", phase, count, count / INTERVAL_SIZE);
+        return;
+    }
     fprintf(stderr, "[simpoint] %-12s %" PRIu64 " insns (interval %" PRIu64
             " of %" PRIu64 ")\n",
             phase, count, count / INTERVAL_SIZE,
             simpoint_end_of_last_interval() / INTERVAL_SIZE);
+}
+
+/*
+ * Built-in BBV collection (-simpoints bbv=FILE).
+ *
+ * Counting TBs add their instruction count to a per-TB counter cell in
+ * generated code (summed by block key at each boundary, see below), see
+ * gen_tb_start_simpoint(); the add is masked with qemu_simpoint_bbv_mask so
+ * it counts nothing while not counting (or while our program is switched
+ * out with filter=process). The countdown stops exactly at every interval
+ * boundary, where simpoint_bbv_dump() writes one vector and clears the
+ * counters. Interval k therefore covers exactly the same instructions as a
+ * SimPoint window at interval k in a tracing run.
+ *
+ * Block ids are assigned when a block first appears in a written vector,
+ * new blocks in PC order, so they don't depend on translation order or on
+ * blocks only other processes ran.
+ */
+/*
+ * One counter cell per translated counting TB: generated code adds the TB's
+ * charge to cell->weight. At an interval boundary the cells are summed by
+ * the block key chosen with -simpoints bbvkey=:
+ *   start     the TB's first instruction (default; what the bbv plugin uses)
+ *   end       the TB's last instruction: a TB that starts mid-block (retry
+ *             after a page fault) ends at the same branch as the full block
+ *             and gets the same key
+ *   startend  first and last instruction together
+ *   all       writes all three: FILE (start), FILE.end, FILE.startend
+ */
+typedef struct {
+    uint64_t weight;   /* instructions in the current interval (TB adds) */
+    uint64_t start;    /* PC of the first instruction */
+    uint64_t end;      /* PC of the last instruction */
+} SimpointBBVCell;
+
+typedef enum {
+    BBV_KEY_START,
+    BBV_KEY_END,
+    BBV_KEY_STARTEND,
+} SimpointBBVKey;
+
+typedef struct {
+    uint64_t key;
+    uint64_t start, end;   /* first cell seen with this key (for .blocks) */
+    uint64_t weight;
+    uint32_t id;           /* 0 until first written */
+} SimpointBBVBlock;
+
+typedef struct {
+    SimpointBBVKey kind;
+    char *path;
+    gzFile out;
+    GHashTable *blocks;    /* key -> SimpointBBVBlock */
+    uint32_t next_id;
+} SimpointBBVOut;
+
+uint64_t qemu_simpoint_bbv_mask;
+static GPtrArray *bbv_cells;              /* SimpointBBVCell, never freed */
+static SimpointBBVCell *bbv_translating;  /* cell of the TB being translated */
+static SimpointBBVOut bbv_outs[3];
+static int bbv_nouts;
+static uint64_t bbv_intervals;
+
+static bool simpoint_bbv_mode(void)
+{
+    return SIMPOINT_BBV_PATH != NULL;
+}
+
+static bool simpoint_bbv_is_open(void)
+{
+    return bbv_nouts > 0 && bbv_outs[0].out;
+}
+
+/* Translation time: a new counter cell for the TB starting at @pc, or NULL. */
+uint64_t *qemu_simpoint_bbv_counter(uint64_t pc)
+{
+    SimpointBBVCell *c;
+
+    if (!simpoint_bbv_mode() || !bbv_cells) {
+        return NULL;
+    }
+    c = g_new0(SimpointBBVCell, 1);
+    c->start = c->end = pc;
+    g_ptr_array_add(bbv_cells, c);
+    bbv_translating = c;
+    return &c->weight;
+}
+
+void qemu_simpoint_bbv_tb_begin(void)
+{
+    bbv_translating = NULL;
+}
+
+/* Translation done: record the TB's last instruction; returns its cell. */
+void *qemu_simpoint_bbv_tb_done(uint64_t last_pc)
+{
+    SimpointBBVCell *c = bbv_translating;
+
+    bbv_translating = NULL;
+    if (c) {
+        c->end = last_pc;
+    }
+    return c;
+}
+
+static uint64_t simpoint_bbv_key(SimpointBBVKey kind, const SimpointBBVCell *c)
+{
+    switch (kind) {
+    case BBV_KEY_START:
+        return c->start;
+    case BBV_KEY_END:
+        return c->end;
+    default:
+        return (c->start * 0x9E3779B97F4A7C15ULL) ^ c->end;
+    }
+}
+
+static gint simpoint_bbv_cmp_pc(gconstpointer a, gconstpointer b, gpointer data)
+{
+    const SimpointBBVBlock *x = *(SimpointBBVBlock *const *)a;
+    const SimpointBBVBlock *y = *(SimpointBBVBlock *const *)b;
+    SimpointBBVKey kind = GPOINTER_TO_INT(data);
+    uint64_t xa = kind == BBV_KEY_END ? x->end : x->start;
+    uint64_t ya = kind == BBV_KEY_END ? y->end : y->start;
+    uint64_t xb = kind == BBV_KEY_END ? x->start : x->end;
+    uint64_t yb = kind == BBV_KEY_END ? y->start : y->end;
+
+    if (xa != ya) {
+        return xa < ya ? -1 : 1;
+    }
+    return xb < yb ? -1 : xb > yb;
+}
+
+static gint simpoint_bbv_cmp_weight(gconstpointer a, gconstpointer b)
+{
+    const SimpointBBVBlock *x = *(SimpointBBVBlock *const *)a;
+    const SimpointBBVBlock *y = *(SimpointBBVBlock *const *)b;
+    if (x->weight != y->weight) {
+        return x->weight > y->weight ? -1 : 1;
+    }
+    return x->id < y->id ? -1 : x->id > y->id;
+}
+
+static void simpoint_bbv_dump_one(SimpointBBVOut *o)
+{
+    GPtrArray *used = g_ptr_array_new();
+    GPtrArray *fresh = g_ptr_array_new();
+    GHashTableIter it;
+    gpointer key, val;
+
+    for (guint i = 0; i < bbv_cells->len; i++) {
+        SimpointBBVCell *c = g_ptr_array_index(bbv_cells, i);
+        uint64_t k;
+        SimpointBBVBlock *b;
+
+        if (!c->weight) {
+            continue;
+        }
+        k = simpoint_bbv_key(o->kind, c);
+        b = g_hash_table_lookup(o->blocks, &k);
+        if (!b) {
+            b = g_new0(SimpointBBVBlock, 1);
+            b->key = k;
+            b->start = c->start;
+            b->end = c->end;
+            g_hash_table_insert(o->blocks, &b->key, b);
+        }
+        b->weight += c->weight;
+    }
+
+    g_hash_table_iter_init(&it, o->blocks);
+    while (g_hash_table_iter_next(&it, &key, &val)) {
+        SimpointBBVBlock *b = val;
+        if (b->weight) {
+            g_ptr_array_add(used, b);
+            if (!b->id) {
+                g_ptr_array_add(fresh, b);
+            }
+        }
+    }
+    g_ptr_array_sort_with_data(fresh, simpoint_bbv_cmp_pc,
+                               GINT_TO_POINTER(o->kind));
+    for (guint i = 0; i < fresh->len; i++) {
+        ((SimpointBBVBlock *)g_ptr_array_index(fresh, i))->id = ++o->next_id;
+    }
+    g_ptr_array_sort(used, simpoint_bbv_cmp_weight);
+
+    gzputc(o->out, 'T');
+    for (guint i = 0; i < used->len; i++) {
+        SimpointBBVBlock *b = g_ptr_array_index(used, i);
+        gzprintf(o->out, "%s:%u:%" PRIu64, i ? " " : "", b->id, b->weight);
+        b->weight = 0;
+    }
+    gzputc(o->out, '\n');
+    if ((bbv_intervals + 1) % 10 == 0) {
+        gzflush(o->out, Z_SYNC_FLUSH);
+    }
+    g_ptr_array_free(used, TRUE);
+    g_ptr_array_free(fresh, TRUE);
+}
+
+static void simpoint_bbv_dump(void)
+{
+    for (int i = 0; i < bbv_nouts; i++) {
+        simpoint_bbv_dump_one(&bbv_outs[i]);
+    }
+    for (guint i = 0; i < bbv_cells->len; i++) {
+        ((SimpointBBVCell *)g_ptr_array_index(bbv_cells, i))->weight = 0;
+    }
+    bbv_intervals++;
+}
+
+/* Write the block maps (id -> PCs) and close the outputs. */
+static void simpoint_bbv_close(void)
+{
+    if (!simpoint_bbv_is_open()) {
+        return;
+    }
+    qemu_simpoint_bbv_mask = 0;
+    for (int i = 0; i < bbv_nouts; i++) {
+        SimpointBBVOut *o = &bbv_outs[i];
+        g_autofree char *map_path = g_strdup_printf("%s.blocks", o->path);
+        FILE *map;
+        GHashTableIter it;
+        gpointer key, val;
+
+        gzclose(o->out);
+        o->out = NULL;
+        map = fopen(map_path, "w");
+        if (map) {
+            g_hash_table_iter_init(&it, o->blocks);
+            while (g_hash_table_iter_next(&it, &key, &val)) {
+                SimpointBBVBlock *b = val;
+                if (!b->id) {
+                    continue;
+                }
+                if (o->kind == BBV_KEY_START) {
+                    fprintf(map, "%u 0x%" PRIx64 "\n", b->id, b->start);
+                } else if (o->kind == BBV_KEY_END) {
+                    fprintf(map, "%u 0x%" PRIx64 "\n", b->id, b->end);
+                } else {
+                    fprintf(map, "%u 0x%" PRIx64 " 0x%" PRIx64 "\n", b->id,
+                            b->start, b->end);
+                }
+            }
+            fclose(map);
+        }
+        fprintf(stderr, "SimPoint BBV: %" PRIu64 " intervals, %u blocks "
+                "written to %s (partial last interval discarded)\n",
+                bbv_intervals, o->next_id, o->path);
+    }
+}
+
+static void simpoint_bbv_add_out(SimpointBBVKey kind, const char *suffix)
+{
+    SimpointBBVOut *o = &bbv_outs[bbv_nouts++];
+
+    o->kind = kind;
+    o->path = g_strdup_printf("%s%s", SIMPOINT_BBV_PATH, suffix);
+    o->blocks = g_hash_table_new(g_int64_hash, g_int64_equal);
+    o->next_id = 0;
+    o->out = gzopen(o->path, "w");
+    if (!o->out) {
+        fprintf(stderr, "SimPoint BBV: cannot open %s\n", o->path);
+        exit(1);
+    }
+}
+
+static void simpoint_bbv_open(void)
+{
+    const char *k = SIMPOINT_BBV_KEY ? SIMPOINT_BBV_KEY : "start";
+
+    if (simpoint_bbv_is_open()) {
+        return;
+    }
+    if (!bbv_cells) {
+        bbv_cells = g_ptr_array_new();
+        atexit(simpoint_bbv_close);
+    }
+    bbv_nouts = 0;
+    if (!strcmp(k, "end")) {
+        simpoint_bbv_add_out(BBV_KEY_END, "");
+    } else if (!strcmp(k, "startend")) {
+        simpoint_bbv_add_out(BBV_KEY_STARTEND, "");
+    } else if (!strcmp(k, "all")) {
+        simpoint_bbv_add_out(BBV_KEY_START, "");
+        simpoint_bbv_add_out(BBV_KEY_END, ".end");
+        simpoint_bbv_add_out(BBV_KEY_STARTEND, ".startend");
+    } else {
+        simpoint_bbv_add_out(BBV_KEY_START, "");
+    }
+}
+
+/* Counting adds are live exactly while counting our program. */
+static void simpoint_bbv_update_mask(void)
+{
+    bool on = simpoint_bbv_mode() && simpoint_bbv_is_open() &&
+              sp_state.mode == SIMPOINT_MODE_COUNTING && !sp_state.paused;
+
+    qemu_simpoint_bbv_mask = on ? UINT64_MAX : 0;
 }
 
 /*
@@ -1263,7 +1604,9 @@ static void simpoint_schedule_next_stop(uint64_t count)
 {
     uint64_t target;
 
-    if (find_active_interval(count).should_trace) {
+    if (simpoint_bbv_mode()) {
+        target = (count / INTERVAL_SIZE + 1) * INTERVAL_SIZE;
+    } else if (find_active_interval(count).should_trace) {
         target = count;
     } else {
         uint64_t last_end = simpoint_end_of_last_interval();
@@ -1301,11 +1644,7 @@ static void simpoint_set_mode(CPUArchState *env, simpoint_mode_t mode)
         sp_state.instr_count = simpoint_current_insn_count();
     }
 
-    /*
-     * Traced windows count completed instructions only. When one ends, add
-     * back the faulting instructions it skipped so counting resumes in the
-     * same units as the BBVs (which count them).
-     */
+    /* PC-based simpoints: see window_faults. Always 0 in interval mode. */
     if (sp_state.mode == SIMPOINT_MODE_TRACING &&
         mode != SIMPOINT_MODE_TRACING) {
         sp_state.instr_count += sp_state.window_faults;
@@ -1330,6 +1669,7 @@ static void simpoint_set_mode(CPUArchState *env, simpoint_mode_t mode)
             cpu->tcg_cflags &= ~CF_SIMPOINT_COUNTDOWN;
         }
     }
+    simpoint_bbv_update_mask();
 }
 
 /*
@@ -1347,10 +1687,17 @@ static bool simpoint_commit_is_user(CPUArchState *env)
 }
 
 /*
- * Was the instruction pending commit cut short by a synchronous exception?
- * Instruction-fetch faults are raised before the next instruction starts,
- * so in that case the pending instruction (the last one of the previous
- * TB) did complete. Interrupts are only taken between instructions.
+ * Did the instruction pending commit fail to retire because of a
+ * synchronous exception? SimPoint counts (COUNTING, BBVs, traced windows)
+ * and traces retired instructions only, so such an instruction is neither
+ * counted nor traced; when it is retried after the handler, the retry is.
+ *  - Instruction-fetch faults are raised before the next instruction
+ *    starts, so the pending instruction (the last one of the previous TB)
+ *    did complete.
+ *  - ecall / ebreak raise an exception and do not retire either (they
+ *    don't increment minstret), so they are neither counted nor traced;
+ *    the COUNTING side doesn't charge them (translator_note_unretired()).
+ * Interrupts are only taken between instructions.
  */
 static bool simpoint_pending_insn_faulted(cpu_log_instr_info_t *iinfo)
 {
@@ -1570,6 +1917,29 @@ static void do_instr_commit(CPUArchState *env)
         sp_state.mode == SIMPOINT_MODE_STEPPING_TO_START) {
         return;
     }
+
+    /*
+     * Never write a record for an instruction whose PC was not captured.
+     * The per-instruction log helpers only fill iinfo while the log level
+     * is active, but a logging TB still calls the commit helper after
+     * logging was switched off underneath it (e.g. the qtrace per-thread
+     * stop the kernel issues when the traced thread is switched out).
+     * Such a record would be all zeros (ip=0) and would also be counted
+     * as part of the SimPoint window, so drop it without counting it.
+     */
+    if (iinfo->pc == 0) {
+        static uint64_t dropped_no_pc;
+
+        dropped_no_pc++;
+        if ((dropped_no_pc & (dropped_no_pc - 1)) == 0 ||
+            (dropped_no_pc & ((1u << 20) - 1)) == 0) {
+            fprintf(stderr,
+                    "[log_instr] dropped %" PRIu64 " instruction record(s) "
+                    "with no PC (logging was off when they executed)\n",
+                    dropped_no_pc);
+        }
+        return;
+    }
     
     /* SimPoint dispatch */
     bool should_emit = true;
@@ -1667,16 +2037,23 @@ static void do_cpu_loglevel_switch(CPUState *cpu, run_on_cpu_data data)
          * the last instruction before every trap.
          */
         if ((simpoints || simpoint_pcs) &&
-            sp_state.mode == SIMPOINT_MODE_TRACING &&
+            (sp_state.mode == SIMPOINT_MODE_TRACING ||
+             sp_state.mode == SIMPOINT_MODE_COUNTING) &&
             simpoint_pending_insn_faulted(iinfo)) {
             /*
-             * SimPoint traces only contain completed instructions, and a
-             * window of N instructions holds exactly N of them: the one that
-             * raised the exception (ecall, page fault, CHERI fault, ...) is
-             * neither traced nor counted here. It is added back to the
-             * count when the window ends (see simpoint_set_mode).
+             * The pending instruction raised an exception and did not
+             * retire (page fault, CHERI fault, illegal instruction, ecall,
+             * ebreak, ...):
+             * it is neither traced nor counted, in a traced window or in a
+             * logging TB still running just after one (COUNTING). The
+             * countdown and the BBVs don't count it either, so a window of
+             * N instructions holds exactly the N retired instructions of
+             * BBV interval k. PC-based simpoints keep adding these back to
+             * instr_count when the window ends (see simpoint_set_mode).
              */
-            sp_state.window_faults++;
+            if (simpoint_pcs && sp_state.mode == SIMPOINT_MODE_TRACING) {
+                sp_state.window_faults++;
+            }
         } else {
             sp_deferred_user_commit =
                 (prev_level == QEMU_LOG_INSTR_LOGLEVEL_USER);
@@ -2193,6 +2570,94 @@ void qemu_simpoint_step_to_start_pc(CPUArchState *env, target_ulong tb_pc,
 }
 
 /*
+ * filter=process support. The traced program is identified by its
+ * page-table root (all its threads share it); the kernel changes satp on
+ * every switch between processes, so a satp write is exactly the point
+ * where our program starts or stops running user code.
+ */
+static uint64_t simpoint_page_table_root(CPUArchState *env)
+{
+#ifdef TARGET_RISCV
+    target_ulong ppn = riscv_cpu_is_32bit(env) ? (env->satp & SATP32_PPN)
+                                               : (env->satp & SATP64_PPN);
+    return (uint64_t)ppn << TARGET_PAGE_BITS;
+#else
+    return 0;
+#endif
+}
+
+static bool simpoint_filtering(void)
+{
+    return SIMPOINT_PROCESS_FILTER && sp_state.program_root != 0 &&
+           (sp_state.mode == SIMPOINT_MODE_COUNTING ||
+            sp_state.mode == SIMPOINT_MODE_TRACING);
+}
+
+/* Our program was switched out: stop counting and tracing. */
+static void simpoint_pause(CPUArchState *env)
+{
+    uint64_t remaining = simpoint_countdown_remaining();
+
+    sp_state.paused = true;
+    simpoint_bbv_update_mask();
+    if (sp_state.mode == SIMPOINT_MODE_COUNTING) {
+        simpoint_set_countdown(remaining);      /* parks it */
+    } else {
+        cpu_loglevel_switch(env, QEMU_LOG_INSTR_LOGLEVEL_NONE);
+    }
+}
+
+/*
+ * Whether logging is compiled into a TB is decided at translation time and
+ * is not part of the TB lookup key. While our program is switched out of a
+ * traced window, other processes translate user TBs without logging; code
+ * on shared pages (libc, rtld, ...) at the same address is then reused by
+ * our program after it resumes, and those instructions would be neither
+ * traced nor counted. Remember that this happened and flush on resume.
+ */
+static bool sp_untraced_user_tb;
+
+void qemu_simpoint_note_translation(CPUArchState *env, bool logging)
+{
+    if (!logging && sp_state.paused &&
+        sp_state.mode == SIMPOINT_MODE_TRACING && cpu_in_user_mode(env)) {
+        sp_untraced_user_tb = true;
+    }
+}
+
+/* Our program was switched back in: resume counting and tracing. */
+static void simpoint_resume(CPUArchState *env)
+{
+    sp_state.paused = false;
+    simpoint_bbv_update_mask();
+    if (sp_state.mode == SIMPOINT_MODE_COUNTING) {
+        simpoint_set_countdown(sp_state.paused_remaining);
+    } else {
+        cpu_loglevel_switch(env, QEMU_LOG_INSTR_LOGLEVEL_USER);
+        if (sp_untraced_user_tb) {
+            sp_untraced_user_tb = false;
+            tb_flush(env_cpu(env));
+        }
+    }
+}
+
+/* Called after every satp write (target/riscv/csr.c). */
+void qemu_simpoint_address_space_changed(CPUArchState *env)
+{
+    bool ours;
+
+    if (!simpoint_filtering()) {
+        return;
+    }
+    ours = simpoint_page_table_root(env) == sp_state.program_root;
+    if (ours && sp_state.paused) {
+        simpoint_resume(env);
+    } else if (!ours && !sp_state.paused) {
+        simpoint_pause(env);
+    }
+}
+
+/*
  * Called before a TB executes. When the 1-insn stepping TB at START_PC is
  * about to run, switch to COUNTING (or straight to TRACING) *before* it
  * executes, so the START_PC instruction is instruction 0, as in the BBV
@@ -2208,6 +2673,17 @@ bool qemu_simpoint_at_start_pc(CPUArchState *env, target_ulong tb_pc)
 
     fprintf(stderr, "START_PC 0x%" PRIx64 " reached\n", START_PC);
     sp_state.instr_count = 0;
+    sp_state.paused = false;
+    if (SIMPOINT_PROCESS_FILTER) {
+        sp_state.program_root = simpoint_page_table_root(env);
+        if (sp_state.program_root) {
+            fprintf(stderr, "SimPoint filter: tracking the process with page "
+                    "table at 0x%" PRIx64 "\n", sp_state.program_root);
+        } else {
+            fprintf(stderr, "SimPoint filter: paging is off at START_PC, "
+                    "filter=process has no effect\n");
+        }
+    }
 
     /* Check if interval 0 is immediately a simpoint */
     interval_match_t m = find_active_interval(0);
@@ -2285,6 +2761,16 @@ static void simpoint_reached_stop(CPUArchState *env)
     interval_match_t m;
 
     sp_state.instr_count = count;
+
+    if (simpoint_bbv_mode()) {
+        if (count % INTERVAL_SIZE == 0) {
+            simpoint_bbv_dump();
+            simpoint_progress("bbv", count);
+        }
+        simpoint_schedule_next_stop(count);
+        return;
+    }
+
     m = find_active_interval(count);
 
     if (m.should_trace) {
@@ -2341,19 +2827,24 @@ bool qemu_simpoint_handle_countdown_exit(CPUState *cpu, TranslationBlock *tb)
     uint64_t remaining;
 
     if (!(tb_cflags(tb) & CF_SIMPOINT_COUNTDOWN) || !cpu_in_user_mode(env) ||
-        (int64_t)countdown >= (int64_t)tb->icount) {
+        !tb->simpoint_countdown ||
+        (int64_t)countdown >= (int64_t)tb->simpoint_charge) {
         return false;
     }
 
-    if (sp_state.mode != SIMPOINT_MODE_COUNTING) {
-        /* Stale counting TB reached through an old chain; let it run. */
+    if (sp_state.mode != SIMPOINT_MODE_COUNTING || sp_state.paused) {
+        /*
+         * Stale counting TB reached through an old chain, or another
+         * process used up the parked counter while ours is switched out
+         * (filter=process): nothing to count, let it run.
+         */
         qatomic_set(&qemu_simpoint_countdown, INT32_MAX);
         return true;
     }
 
     remaining = (uint64_t)countdown + sp_state.countdown_overflow;
 
-    if (remaining >= tb->icount) {
+    if (remaining >= tb->simpoint_charge) {
         simpoint_set_countdown(remaining);
         return true;
     }
@@ -2366,6 +2857,35 @@ bool qemu_simpoint_handle_countdown_exit(CPUState *cpu, TranslationBlock *tb)
 
     simpoint_reached_stop(env);
     return true;
+}
+
+/*
+ * A countdown TB charged its instructions to the countdown (and to its BBV
+ * counter) at entry, but is being left at instruction @insn_idx, which did
+ * not complete: a synchronous exception (page fault, CHERI fault, ...; the
+ * instruction is retried or never runs) or a forced re-execution
+ * (self-modifying code, watchpoint). Give back what was charged from that
+ * instruction on, so COUNTING and the BBVs count retired instructions only,
+ * as traced windows do. Without this, every mid-TB fault overcounted by the
+ * rest of the TB, by amounts that depend on where TBs happen to start.
+ */
+void qemu_simpoint_unwind_tb(CPUState *cpu, TranslationBlock *tb,
+                             int insn_idx)
+{
+    int n = (int)tb->simpoint_charge - insn_idx;
+
+    if (n <= 0) {
+        return;
+    }
+    qatomic_set(&qemu_simpoint_countdown,
+                qatomic_read(&qemu_simpoint_countdown) + n);
+    if (qemu_simpoint_bbv_mask && tb->simpoint_bbv_cell) {
+        SimpointBBVCell *c = tb->simpoint_bbv_cell;
+
+        if (c->weight >= (uint64_t)n) {
+            c->weight -= n;
+        }
+    }
 }
 
 
@@ -2804,9 +3324,39 @@ void helper_qemu_log_instr_buffer_flush(CPUArchState *env)
 }
 
 /* Start logging all instructions on the current CPU */
+/*
+ * The generic qtrace start/stop instructions (slti zero, zero, 0x1b/0x1e/
+ * 0x2b/0x2e) are not meant for SimPoint runs, which use 0x3b/0x3e. With
+ * hw.qemu_trace_perthread=1 the CheriBSD kernel issues them on every
+ * context switch; acting on them would turn logging off in the middle of a
+ * window (freezing it, since nothing is counted) or on during counting.
+ */
+static bool simpoint_ignores_qtrace_magic(void)
+{
+    static bool warned;
+
+    if ((!simpoints && !simpoint_pcs) ||
+        sp_state.mode == SIMPOINT_MODE_INACTIVE) {
+        return false;
+    }
+    if (!warned) {
+        warned = true;
+        fprintf(stderr, "[simpoint] ignoring qtrace start/stop instructions "
+                "during the SimPoint run (the kernel issues them on context "
+                "switches when hw.qemu_trace_perthread=1; set it to 0, and "
+                "use -simpoints filter=process to exclude other "
+                "processes)\n");
+    }
+    return true;
+}
+
 void helper_qemu_log_instr_start(CPUArchState *env, target_ulong pc)
 {
     cpu_log_instr_state_t *cpulog = get_cpu_log_state(env);
+
+    if (simpoint_ignores_qtrace_magic()) {
+        return;
+    }
 
     log_assert(cpulog != NULL && "Invalid log state");
     global_loglevel_enable();
@@ -2824,6 +3374,10 @@ void helper_qemu_log_instr_user_start(CPUArchState *env, target_ulong pc)
 {
     cpu_log_instr_state_t *cpulog = get_cpu_log_state(env);
 
+    if (simpoint_ignores_qtrace_magic()) {
+        return;
+    }
+
     log_assert(cpulog != NULL && "Invalid log state");
     global_loglevel_enable();
 
@@ -2837,6 +3391,9 @@ void helper_qemu_log_instr_user_start(CPUArchState *env, target_ulong pc)
 /* Stop logging on the current CPU */
 void helper_qemu_log_instr_stop(CPUArchState *env, target_ulong pc)
 {
+    if (simpoint_ignores_qtrace_magic()) {
+        return;
+    }
 
     cpu_loglevel_switch(env, QEMU_LOG_INSTR_LOGLEVEL_NONE);
 }
@@ -2861,6 +3418,26 @@ void helper_qemu_log_instr_simpoint_start(CPUArchState *env, target_ulong pc)
         return;
     }
 
+    /*
+     * sp_state, the countdown and the BBV counters are global and updated
+     * without locking from whichever vCPU runs: one vCPU only.
+     */
+    {
+        CPUState *c;
+        int ncpus = 0;
+
+        CPU_FOREACH(c) {
+            ncpus++;
+        }
+        if (ncpus != 1) {
+            fprintf(stderr, "helper_qemu_log_instr_simpoint_start(): SimPoint "
+                    "runs need exactly one vCPU (-smp 1), have %d.\n"
+                    "Terminating QEMU.\n", ncpus);
+            qemu_system_shutdown_request(SHUTDOWN_CAUSE_GUEST_SHUTDOWN);
+            return;
+        }
+    }
+
     fprintf(stderr, "Simpoint-aware tracing started (START_PC=0x%" PRIx64 ")\n", START_PC);
 
     sp_state.instr_count = 0;
@@ -2868,6 +3445,12 @@ void helper_qemu_log_instr_simpoint_start(CPUArchState *env, target_ulong pc)
     sp_state.in_warmup   = false;
     sp_state.stop        = false;
     sp_state.file_open   = false;
+    sp_state.program_root = 0;
+    sp_state.paused      = false;
+
+    if (simpoint_bbv_mode()) {
+        simpoint_bbv_open();
+    }
 
 
     if (START_PC != 0) {
@@ -2894,6 +3477,11 @@ void helper_qemu_log_instr_simpoint_stop(CPUArchState *env, target_ulong pc)
 
     /* Leaving COUNTING mode syncs instr_count from the inline countdown. */
     simpoint_set_mode(env, SIMPOINT_MODE_INACTIVE);
+    sp_state.paused = false;
+    sp_state.program_root = 0;
+    if (simpoint_bbv_mode()) {
+        simpoint_bbv_close();
+    }
 
     fprintf(stderr, "Simpoint-aware tracing stopped (counted %" PRIu64 " instructions)\n",
             sp_state.instr_count);

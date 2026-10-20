@@ -203,6 +203,7 @@ static void lookup_and_goto_ptr(DisasContext *ctx)
 
 static void gen_exception_illegal(DisasContext *ctx)
 {
+    translator_note_unretired(&ctx->base);
     generate_exception(ctx, RISCV_EXCP_ILLEGAL_INST);
 }
 
@@ -501,6 +502,7 @@ static void gen_jal(DisasContext *ctx, int rd, target_ulong imm)
 
     if (!has_ext(ctx, RVC)) {
         if ((next_pc & 0x3) != 0) {
+            translator_note_unretired(&ctx->base);
             gen_exception_inst_addr_mis(ctx);
             return;
         }

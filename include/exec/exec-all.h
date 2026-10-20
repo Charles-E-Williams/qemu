@@ -474,6 +474,14 @@ struct TranslationBlock {
     /* size of target code for this block (1 <= size <= TARGET_PAGE_SIZE) */
     uint16_t size;
     uint16_t icount;
+    /*
+     * Translated with the SimPoint inline countdown (and the built-in BBV
+     * add): the whole TB was charged at entry, so an exit part-way through
+     * must give back what did not execute (see cpu_restore_state_from_tb).
+     */
+    bool simpoint_countdown;
+    /* Instructions charged at entry (retired ones only, see translator). */
+    uint16_t simpoint_charge;
 
     struct tb_tc tc;
 
@@ -517,6 +525,9 @@ struct TranslationBlock {
     uintptr_t jmp_list_head;
     uintptr_t jmp_list_next[2];
     uintptr_t jmp_dest[2];
+
+    /* SimPoint built-in BBV: this TB's counter cell (log_instr.c), or NULL. */
+    void *simpoint_bbv_cell;
 };
 
 // Reduce diff to upstream for CHERI (since we addd cs_top/ds_base/ds_top)

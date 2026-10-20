@@ -26,6 +26,7 @@
 #include "trace.h"
 #include "disas/disas.h"
 #include "exec/exec-all.h"
+#include "exec/log_instr.h"
 #include "tcg/tcg.h"
 #if defined(CONFIG_USER_ONLY)
 #include "qemu.h"
@@ -378,6 +379,12 @@ static int cpu_restore_state_from_tb(CPUState *cpu, TranslationBlock *tb,
            and shift if to the number of actually executed instructions */
         cpu_neg(cpu)->icount_decr.u16.low += num_insns - i;
     }
+#ifdef CONFIG_TCG_LOG_INSTR
+    if (reset_icount && tb->simpoint_countdown) {
+        /* Same idea for the SimPoint countdown and the built-in BBVs. */
+        qemu_simpoint_unwind_tb(cpu, tb, i);
+    }
+#endif
     restore_state_to_opc(env, tb, data);
 
 #ifdef CONFIG_PROFILER

@@ -45,6 +45,27 @@ static uint64_t trigger_pc = 0;
 static uint64_t stop_pc = 0;
 static uint64_t interval_size = DEFAULT_INTERVAL_SIZE;
 
+/*
+ * Process filter (5th argument "process"): count only blocks executed in
+ * the address space that executed trigger_pc, i.e. the benchmark process
+ * and all of its threads, and nothing from other processes. Matches
+ * QEMU's -simpoints filter=process. program_root is 0 until the trigger
+ * block executes.
+ */
+static bool filter_process = false;
+static uint64_t program_root = 0;
+
+/*
+ * The page-table root only changes when kernel code runs (only the kernel
+ * writes satp), so kernel blocks bump kernel_epoch with an inline add and a
+ * vCPU re-reads the root only when the epoch moved since it last looked.
+ * Per-vCPU state; kernel_epoch is shared, which is merely conservative.
+ */
+static uint64_t kernel_epoch = 0;
+static uint64_t *vcpu_seen_epoch = NULL;
+static bool *vcpu_in_program = NULL;
+static int n_vcpu_slots = 0;
+
 /* Output files */
 static gzFile bbv_file = NULL;
 static FILE *simpoints_interval_file = NULL;
@@ -60,6 +81,9 @@ static gint cmp_bb_weight(gconstpointer a, gconstpointer b)
     const BasicBlock *bb = (const BasicBlock *)b;
     if (ba->weighted_count > bb->weighted_count) return -1;
     if (ba->weighted_count < bb->weighted_count) return 1;
+    /* Equal weights: order by id, not by hash-table order. */
+    if (ba->id < bb->id) return -1;
+    if (ba->id > bb->id) return 1;
     return 0;
 }
 
@@ -145,12 +169,73 @@ static void tb_exec(unsigned int cpu_index, void *udata)
     check_interval(cpu_index, NULL);
 }
 
+/* Is this vCPU running the benchmark process? Captures it at the trigger. */
+static bool in_program(unsigned int cpu_index, const BasicBlock *bb)
+{
+    uint64_t root;
+    uint64_t epoch = __atomic_load_n(&kernel_epoch, __ATOMIC_RELAXED);
+
+    if (cpu_index >= (unsigned int)n_vcpu_slots) {
+        return qemu_plugin_vcpu_page_table_root(cpu_index) == program_root &&
+               program_root != 0;
+    }
+    if (program_root != 0 && vcpu_seen_epoch[cpu_index] == epoch) {
+        return vcpu_in_program[cpu_index];
+    }
+
+    root = qemu_plugin_vcpu_page_table_root(cpu_index);
+    if (program_root == 0) {
+        if (bb->pc != trigger_pc || root == 0) {
+            return false;
+        }
+        program_root = root;
+        fprintf(stderr, "BBV: Process filter: tracking the process with "
+                "page table at 0x%"PRIx64"\n", program_root);
+    }
+    vcpu_seen_epoch[cpu_index] = epoch;
+    vcpu_in_program[cpu_index] = (root == program_root);
+    return vcpu_in_program[cpu_index];
+}
+
+/*
+ * tb_exec for the process filter: the counters are updated here, after the
+ * check, instead of by unconditional inline adds. Same order as the inline
+ * version (bookkeeping first, then this block's instructions are added).
+ */
+static void tb_exec_filtered(unsigned int cpu_index, void *udata)
+{
+    BasicBlock *bb = (BasicBlock *)udata;
+
+    if (!plugin_active || !in_program(cpu_index, bb)) {
+        return;
+    }
+    /*
+     * Number blocks in the order the benchmark first runs them, so blocks
+     * that only other processes ran don't shift the ids (the BBVs then
+     * don't depend on what else ran on the guest).
+     */
+    if (bb->id == 0) {
+        bb->id = ++unique_bb_id;
+    }
+    track_interval_start(cpu_index, udata);
+    check_interval(cpu_index, NULL);
+    bb->weighted_count += bb->n_insns;
+    bb->total_exec++;
+    inst_count += bb->n_insns;
+    total_inst_count += bb->n_insns;
+}
+
 
 static void check_stop(unsigned int cpu_index, void *udata)
 {
     uint64_t pc = (uint64_t)(uintptr_t)udata;
     
     if (!plugin_active) {
+        return;
+    }
+    if (filter_process &&
+        (program_root == 0 ||
+         qemu_plugin_vcpu_page_table_root(cpu_index) != program_root)) {
         return;
     }
     
@@ -179,6 +264,10 @@ static void tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
     }
     
     if (!is_user_address(pc)) {
+        if (filter_process) {
+            qemu_plugin_register_vcpu_tb_exec_inline(
+                tb, QEMU_PLUGIN_INLINE_ADD_U64, &kernel_epoch, 1);
+        }
         return;
     }
     
@@ -203,7 +292,7 @@ static void tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
     if (!bb) {
         bb = g_new0(BasicBlock, 1);
         bb->pc = pc;
-        bb->id = ++unique_bb_id;
+        bb->id = filter_process ? 0 : ++unique_bb_id;  /* see tb_exec_filtered */
         bb->n_insns = n_insns;
         bb->weighted_count = 0;
         bb->total_exec = 0;
@@ -211,6 +300,12 @@ static void tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
         g_hash_table_insert(bb_table, &bb->pc, bb);
     }
     
+    if (filter_process) {
+        qemu_plugin_register_vcpu_tb_exec_cb(tb, tb_exec_filtered,
+                                             QEMU_PLUGIN_CB_NO_REGS, bb);
+        return;
+    }
+
     qemu_plugin_register_vcpu_tb_exec_cb(tb, tb_exec,
                                          QEMU_PLUGIN_CB_NO_REGS, bb);
     
@@ -267,6 +362,8 @@ static void plugin_init(const char *name)
     fprintf(simpoints_interval_file, "# interval_size=%"PRIu64"\n", interval_size);
     fprintf(simpoints_interval_file, "# trigger_pc=0x%"PRIx64"\n", trigger_pc);
     fprintf(simpoints_interval_file, "# stop_pc=0x%"PRIx64"\n", stop_pc);
+    fprintf(simpoints_interval_file, "# filter=%s\n",
+            filter_process ? "process" : "none");
     fprintf(simpoints_interval_file, "#\n");
     
     g_free(bbv_name);
@@ -284,7 +381,7 @@ int qemu_plugin_install(qemu_plugin_id_t id, const qemu_info_t *info,
     
     plugin_id = id;
     
-    /* Parse arguments: name, trigger_pc, interval_size, stop_pc */
+    /* Parse arguments: name, trigger_pc, interval_size, stop_pc, filter */
     if (argc > 0) {
         bench_name = argv[0];
     }
@@ -311,6 +408,30 @@ int qemu_plugin_install(qemu_plugin_id_t id, const qemu_info_t *info,
         stop_pc = strtoull(argv[3], NULL, 0);
         if (stop_pc != 0) {
             fprintf(stderr, "BBV: Will stop at PC 0x%"PRIx64"\n", stop_pc);
+        }
+    }
+
+    if (argc > 4) {
+        if (strcmp(argv[4], "process") == 0) {
+            filter_process = true;
+        } else if (strcmp(argv[4], "none") != 0) {
+            fprintf(stderr, "BBV: unknown filter '%s' (process|none)\n",
+                    argv[4]);
+            return -1;
+        }
+        if (filter_process && trigger_pc == 0) {
+            fprintf(stderr, "BBV: the process filter needs a trigger PC\n");
+            return -1;
+        }
+        if (filter_process) {
+            n_vcpu_slots = qemu_plugin_n_max_vcpus();
+            if (n_vcpu_slots < 1) {
+                n_vcpu_slots = 1;
+            }
+            vcpu_seen_epoch = g_new0(uint64_t, n_vcpu_slots);
+            vcpu_in_program = g_new0(bool, n_vcpu_slots);
+            fprintf(stderr, "BBV: Process filter: only the process that "
+                    "executes the trigger PC is counted\n");
         }
     }
     

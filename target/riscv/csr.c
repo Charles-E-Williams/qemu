@@ -989,6 +989,7 @@ static int write_satp(CPURISCVState *env, int csrno, target_ulong val)
                 tlb_flush(env_cpu(env));
             }
             env->satp = val;
+            qemu_simpoint_address_space_changed(env);
         }
     }
     return 0;

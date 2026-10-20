@@ -4415,7 +4415,7 @@ SRST
 ERST
 
 DEF("simpoints", HAS_ARG, QEMU_OPTION_simpoints,
-    "-simpoints file=SIMPOINTS_FILE[,interval=INTERVAL_SIZE][,warmup=WARMUP_INSTRUCTIONS][,format=FORMAT][,start_pc=START_PC]\n"
+    "-simpoints file=SIMPOINTS_FILE[,interval=INTERVAL_SIZE][,warmup=WARMUP_INSTRUCTIONS][,format=FORMAT][,start_pc=START_PC][,filter=process|none]\n"
     "               Enable tracing using the SimPoints methodology\n"
     "               file=SIMPOINTS_FILE: path to the SimPoints file\n" 
     "               interval=INTERVAL_SIZE: SimPoints interval size (default 1B)\n"
@@ -4423,7 +4423,15 @@ DEF("simpoints", HAS_ARG, QEMU_OPTION_simpoints,
     "               format=FORMAT: 'pc' for PC-based or 'interval' for interval-based (default)\n"
     "                 PC format: PC execution_count interval_number per line\n"
     "                 Interval format: interval_number per line\n"
-    "               start_pc=START_PC: PC address where tracing should begin (e.g., main function)\n",
+    "               start_pc=START_PC: PC address where tracing should begin (e.g., main function)\n"
+    "               filter=process: count and trace only user instructions of the process\n"
+    "                 that reaches START_PC (all of its threads); default none (all user code).\n"
+    "                 Collect the BBVs with the same filter (bbv plugin 'process' argument).\n"
+    "-simpoints bbv=FILE[,interval=N][,start_pc=PC][,filter=process|none][,bbvkey=KEY]\n"
+    "               BBV profiling run: write one basic block vector per interval to FILE (gzip)\n"
+    "               bbvkey=start|end|startend|all: what identifies a block (default start).\n"
+    "                 end (last instruction) is not affected by where blocks are entered,\n"
+    "                 e.g. retries after page faults; all writes FILE, FILE.end, FILE.startend\n",
     QEMU_ARCH_ALL)
 
 DEF("sandbox", HAS_ARG, QEMU_OPTION_sandbox, \

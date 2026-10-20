@@ -40,6 +40,20 @@ extern int32_t qemu_simpoint_countdown;
 #endif
 static TCGOp *simpoint_countdown_sub_op;
 
+/*
+ * Built-in BBV collection (-simpoints bbv=FILE): every counting TB adds its
+ * instruction count to its block's counter, masked by qemu_simpoint_bbv_mask
+ * (all ones while counting our program, 0 while it is switched out), so
+ * nothing calls out of generated code. The immediate is patched in
+ * gen_tb_end like the countdown's.
+ */
+extern uint64_t qemu_simpoint_bbv_mask;
+#ifndef QEMU_SIMPOINT_BBV_COUNTER_DECLARED
+#define QEMU_SIMPOINT_BBV_COUNTER_DECLARED
+uint64_t *qemu_simpoint_bbv_counter(uint64_t pc);
+#endif
+static TCGOp *simpoint_bbv_and_op;
+
 #if UINTPTR_MAX == UINT32_MAX
 # define simpoint_countdown_ptr() \
     ((TCGv_ptr)tcg_constant_i32((intptr_t)&qemu_simpoint_countdown))
@@ -116,6 +130,29 @@ static inline void gen_tb_start_simpoint(const TranslationBlock *tb,
         tcg_gen_st_i32(countdown, simpoint_countdown_ptr(), 0);
         tcg_temp_free_i32(countdown);
     }
+    simpoint_bbv_and_op = NULL;
+#if TCG_TARGET_REG_BITS == 64
+    if (emit_countdown) {
+        uint64_t *ctr = qemu_simpoint_bbv_counter(tb->pc);
+
+        if (ctr) {
+            TCGv_i64 inc = tcg_temp_new_i64();
+            TCGv_i64 val = tcg_temp_new_i64();
+            TCGv_ptr mask_p = (TCGv_ptr)tcg_constant_i64(
+                (intptr_t)&qemu_simpoint_bbv_mask);
+            TCGv_ptr ctr_p = (TCGv_ptr)tcg_constant_i64((intptr_t)ctr);
+
+            tcg_gen_ld_i64(inc, mask_p, 0);
+            tcg_gen_and_i64(inc, inc, tcg_constant_i64(0));
+            simpoint_bbv_and_op = tcg_last_op();
+            tcg_gen_ld_i64(val, ctr_p, 0);
+            tcg_gen_add_i64(val, val, inc);
+            tcg_gen_st_i64(val, ctr_p, 0);
+            tcg_temp_free_i64(inc);
+            tcg_temp_free_i64(val);
+        }
+    }
+#endif
 #endif
 
     tcg_temp_free_i32(count);
@@ -126,7 +163,13 @@ static inline void gen_tb_start(const TranslationBlock *tb)
     gen_tb_start_simpoint(tb, false);
 }
 
-static inline void gen_tb_end(const TranslationBlock *tb, int num_insns)
+/*
+ * @charge: what the SimPoint countdown and BBV add charge (the instructions
+ * that can retire; less than @num_insns when the TB ends in an exception the
+ * translator raises unconditionally). icount keeps using @num_insns.
+ */
+static inline void gen_tb_end_charge(const TranslationBlock *tb, int num_insns,
+                                     int charge)
 {
     if (tb_cflags(tb) & CF_USE_ICOUNT) {
         /*
@@ -139,13 +182,25 @@ static inline void gen_tb_end(const TranslationBlock *tb, int num_insns)
 #ifdef CONFIG_TCG_LOG_INSTR
     if (simpoint_countdown_sub_op) {
         tcg_set_insn_param(simpoint_countdown_sub_op, 2,
-                           tcgv_i32_arg(tcg_constant_i32(num_insns)));
+                           tcgv_i32_arg(tcg_constant_i32(charge)));
         simpoint_countdown_sub_op = NULL;
     }
+#if TCG_TARGET_REG_BITS == 64
+    if (simpoint_bbv_and_op) {
+        tcg_set_insn_param(simpoint_bbv_and_op, 2,
+                           tcgv_i64_arg(tcg_constant_i64(charge)));
+        simpoint_bbv_and_op = NULL;
+    }
+#endif
 #endif
 
     gen_set_label(tcg_ctx->exitreq_label);
     tcg_gen_exit_tb(tb, TB_EXIT_REQUESTED);
+}
+
+static inline void gen_tb_end(const TranslationBlock *tb, int num_insns)
+{
+    gen_tb_end_charge(tb, num_insns, num_insns);
 }
 
 #endif

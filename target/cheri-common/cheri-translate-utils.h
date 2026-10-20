@@ -498,6 +498,7 @@ static inline void gen_check_pcc_bounds_next_inst(DisasContext *ctx,
     // permitted to avoid any differences with non-CHERI enabled CPUs.
     tcg_debug_assert(ctx->base.pc_next >= ctx->base.pc_first);
     if (unlikely(ctx->base.pc_next + num_bytes > ctx->base.pcc_top)) {
+        translator_note_unretired(&ctx->base);
         cheri_tcg_prepare_for_unconditional_exception(&ctx->base);
         gen_raise_pcc_violation(&ctx->base, ctx->base.pc_next, num_bytes);
     }
@@ -508,6 +509,7 @@ static inline void gen_check_branch_target(DisasContext *ctx, target_ulong addr)
 {
 #ifdef TARGET_CHERI
     if (unlikely(!in_pcc_bounds(&ctx->base, addr))) {
+        translator_note_unretired(&ctx->base);
         cheri_tcg_prepare_for_unconditional_exception(&ctx->base);
         gen_raise_pcc_violation(&ctx->base, addr, 1);
     }

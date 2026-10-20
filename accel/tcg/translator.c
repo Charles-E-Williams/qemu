@@ -40,6 +40,7 @@ void translator_loop(const TranslatorOps *ops, DisasContextBase *db,
 {
     int bp_insn = 0;
     bool plugin_enabled;
+    target_ulong last_pc = tb->pc;  /* PC of the last instruction translated */
 #ifdef CONFIG_TCG_LOG_INSTR
     /*
      * Cache whether we are logging instructions in this tb
@@ -55,6 +56,7 @@ void translator_loop(const TranslatorOps *ops, DisasContextBase *db,
     db->pc_next = db->pc_first;
     db->is_jmp = DISAS_NEXT;
     db->num_insns = 0;
+    db->simpoint_retire_limit = -1;
     db->max_insns = max_insns;
     db->singlestep_enabled = cpu->singlestep_enabled;
 #ifdef TARGET_CHERI
@@ -91,9 +93,11 @@ void translator_loop(const TranslatorOps *ops, DisasContextBase *db,
      * this at translation time is safe.
      */
 #ifdef CONFIG_TCG_LOG_INSTR
-    gen_tb_start_simpoint(db->tb,
-                          qemu_simpoint_tb_needs_countdown(cpu->env_ptr,
-                                                  tb_cflags(db->tb)));
+    qemu_simpoint_bbv_tb_begin();
+    tb->simpoint_countdown =
+        qemu_simpoint_tb_needs_countdown(cpu->env_ptr, tb_cflags(db->tb));
+    qemu_simpoint_note_translation(cpu->env_ptr, log_instr_enabled);
+    gen_tb_start_simpoint(db->tb, tb->simpoint_countdown);
 #else
     gen_tb_start(db->tb);
 #endif
@@ -116,8 +120,10 @@ void translator_loop(const TranslatorOps *ops, DisasContextBase *db,
     // Each target must reserve one bit in tb->flags as the "PCC valid" flag.
     if (unlikely((tb->cheri_flags & TB_FLAG_CHERI_PCC_EXECUTABLE) !=
                  TB_FLAG_CHERI_PCC_EXECUTABLE)) {
+        translator_note_unretired(db);
         gen_helper_raise_exception_pcc_perms(cpu_env);
     } else if (unlikely(!in_pcc_bounds(db, db->pc_next))) {
+        translator_note_unretired(db);
         gen_raise_pcc_violation(db, db->pc_next, 0);
     }
 #endif
@@ -162,6 +168,7 @@ void translator_loop(const TranslatorOps *ops, DisasContextBase *db,
             }
         }
 
+        last_pc = db->pc_next;
         /* Disassemble one instruction.  The translate_insn hook should
            update db->pc_next and db->is_jmp to indicate what should be
            done next -- either exiting this loop or locate the start of
@@ -222,7 +229,22 @@ void translator_loop(const TranslatorOps *ops, DisasContextBase *db,
 
     /* Emit code to exit the TB, as indicated by db->is_jmp.  */
     ops->tb_stop(db, cpu);
+#ifdef CONFIG_TCG_LOG_INSTR
+    {
+        /* SimPoint counts retired instructions only. */
+        int charge = db->num_insns - bp_insn;
+
+        if (db->simpoint_retire_limit >= 0 &&
+            db->simpoint_retire_limit < charge) {
+            charge = db->simpoint_retire_limit;
+        }
+        tb->simpoint_charge = tb->simpoint_countdown ? charge : 0;
+        tb->simpoint_bbv_cell = qemu_simpoint_bbv_tb_done(last_pc);
+        gen_tb_end_charge(db->tb, db->num_insns - bp_insn, charge);
+    }
+#else
     gen_tb_end(db->tb, db->num_insns - bp_insn);
+#endif
 
     if (plugin_enabled) {
         plugin_gen_tb_end(cpu);

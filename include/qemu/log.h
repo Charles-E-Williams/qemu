@@ -154,6 +154,11 @@ void qemu_set_log(int log_flags);
 void qemu_set_log_internal(int log_flags);
 void qemu_log_needs_buffers(void);
 void qemu_set_log_filename(const char *filename, Error **errp);
+/*
+ * Switch the log to @filename keeping the current log flags, without the
+ * per-CPU instruction log-level switch qemu_set_log() triggers.
+ */
+void qemu_log_switch_file(const char *filename, Error **errp);
 void qemu_set_dfilter_ranges(const char *ranges, Error **errp);
 void qemu_set_simpoints(const char *simpoints_arg, Error **errp);
 

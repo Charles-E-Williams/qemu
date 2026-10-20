@@ -19,6 +19,7 @@
 #ifndef CONFIG_USER_ONLY
 static void check_access(DisasContext *ctx) {
     if (!ctx->hlsx) {
+        translator_note_unretired(&ctx->base);
         if (ctx->virt_enabled) {
             generate_exception(ctx, RISCV_EXCP_VIRT_INSTRUCTION_FAULT);
         } else {

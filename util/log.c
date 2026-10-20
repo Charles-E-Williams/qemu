@@ -39,6 +39,21 @@ GArray *adjusted_simpoints;
 GArray *simpoint_pcs;   
 uint64_t INTERVAL_SIZE;
 uint64_t START_PC = 0;
+/*
+ * filter=process: count and trace only user instructions of the process
+ * that reaches START_PC (identified by its page-table root), so other
+ * processes running on the guest are excluded. All of that process's
+ * threads share the page table, so they are all included.
+ */
+bool SIMPOINT_PROCESS_FILTER = false;
+/*
+ * bbv=FILE: a BBV profiling run instead of a tracing run. QEMU's counting
+ * code collects one basic block vector per interval (from START_PC) and
+ * writes them to FILE (gzip, same format as the bbv plugin).
+ */
+char *SIMPOINT_BBV_PATH = NULL;
+/* bbvkey=start|end|startend|all: what identifies a block in the BBVs. */
+char *SIMPOINT_BBV_KEY = NULL;
 
 /* Return the number of characters emitted.  */
 int qemu_log(const char *fmt, ...)
@@ -202,6 +217,22 @@ void qemu_set_log_filename(const char *filename, Error **errp)
     }
 }
 
+/*
+ * Used between SimPoint windows: qemu_set_log() would also run
+ * qemu_log_instr_global_switch(), which with CPU_LOG_INSTR set (and not
+ * CPU_LOG_INSTR_U) switches every CPU to log level ALL.
+ */
+void qemu_log_switch_file(const char *filename, Error **errp)
+{
+    g_free(logfilename);
+    logfilename = g_strdup(filename);
+    qemu_log_close();
+    qemu_set_log_internal(qemu_loglevel);
+    if (!qemu_logfile) {
+        error_setg(errp, "Failed to open logfile: %s", filename);
+    }
+}
+
 /* Returns true if addr is in our debug filter or no filter defined
  */
 bool qemu_log_in_addr_range(uint64_t addr)
@@ -272,6 +303,14 @@ static bool parse_interval_simpoints(gchar **lines, uint64_t start_pc, uint64_t 
             error_setg(errp, "Invalid line format: %s", line);
             return false;
         }
+
+        if (temp->len &&
+            interval_num <= g_array_index(temp, uint64_t, temp->len - 1)) {
+            error_setg(errp, "SimPoints file must list intervals in strictly "
+                       "increasing order (sort it by interval, e.g. "
+                       "'sort -n'): %s", line);
+            return false;
+        }
         g_array_append_val(temp, interval_num);
     }
 
@@ -318,6 +357,8 @@ void qemu_set_simpoints(const char *simpoints_arg, Error **errp)
     uint64_t interval = 1000000000; /* 1 Billion instructions by default */
     uint64_t warmup = 0;
     uint64_t start_pc = 0;
+    bool process_filter = false;
+    g_autofree char *bbv_path = NULL;
 
     /* Parse arguments */
     for (int i = 0; args[i]; i++) {
@@ -347,18 +388,60 @@ void qemu_set_simpoints(const char *simpoints_arg, Error **errp)
                 error_setg(errp, "Invalid start_pc input");
                 return;
             }
+        } else if (strcmp(kv[0], "bbv") == 0) {
+            g_free(bbv_path);
+            bbv_path = g_strdup(kv[1]);
+        } else if (strcmp(kv[0], "bbvkey") == 0) {
+            if (strcmp(kv[1], "start") && strcmp(kv[1], "end") &&
+                strcmp(kv[1], "startend") && strcmp(kv[1], "all")) {
+                error_setg(errp, "Invalid bbvkey '%s' (start|end|startend|all)",
+                           kv[1]);
+                return;
+            }
+            g_free(SIMPOINT_BBV_KEY);
+            SIMPOINT_BBV_KEY = g_strdup(kv[1]);
+        } else if (strcmp(kv[0], "filter") == 0) {
+            if (strcmp(kv[1], "process") == 0) {
+                process_filter = true;
+            } else if (strcmp(kv[1], "none") == 0) {
+                process_filter = false;
+            } else {
+                error_setg(errp, "Invalid filter '%s' (process|none)", kv[1]);
+                return;
+            }
         } else {
             error_setg(errp, "Unknown option: %s", kv[0]);
             return;
         }
     }
 
-    if (!filename) {
+    if (bbv_path && filename) {
+        error_setg(errp, "bbv= (profiling) and file= (tracing) are "
+                   "separate runs; give one of them");
+        return;
+    }
+    if (!filename && !bbv_path) {
         error_setg(errp, "Missing filename");
         return;
     }
+#if HOST_LONG_BITS != 64
+    if (bbv_path) {
+        error_setg(errp, "bbv= needs a 64-bit host");
+        return;
+    }
+#endif
+    if (process_filter && start_pc == 0) {
+        /*
+         * The process is identified when it reaches start_pc. The
+         * SimPoint start instruction is no substitute: qtrace issues it
+         * before exec, and exec gives the process a new address space.
+         */
+        error_setg(errp, "filter=process needs start_pc");
+        return;
+    }
 
-    if (!g_file_get_contents(filename, &file_contents, NULL, &err)) {
+    if (filename &&
+        !g_file_get_contents(filename, &file_contents, NULL, &err)) {
         error_setg(errp, "Could not read file: %s", err->message);
         return;
     }
@@ -375,6 +458,22 @@ void qemu_set_simpoints(const char *simpoints_arg, Error **errp)
 
     INTERVAL_SIZE = interval;
     START_PC = start_pc; 
+    SIMPOINT_PROCESS_FILTER = process_filter;
+    if (process_filter) {
+        fprintf(stderr, "SimPoint filter: only the process that reaches "
+                "start_pc is counted and traced\n");
+    }
+
+    if (bbv_path) {
+        /* No simpoints: count from START_PC and emit one BBV per interval. */
+        g_free(SIMPOINT_BBV_PATH);
+        SIMPOINT_BBV_PATH = g_steal_pointer(&bbv_path);
+        simpoints = g_array_new(FALSE, TRUE, sizeof(uint64_t));
+        adjusted_simpoints = g_array_new(FALSE, TRUE, sizeof(uint64_t));
+        fprintf(stderr, "SimPoint BBV profiling: interval %" PRIu64
+                ", output %s\n", interval, SIMPOINT_BBV_PATH);
+        return;
+    }
 
     lines = g_strsplit(file_contents, "\n", -1);
     

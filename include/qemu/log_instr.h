@@ -173,7 +173,8 @@ typedef enum {
 } simpoint_mode_t;
 
 
-static struct {
+/* SimPoint state; the one instance lives in accel/tcg/log_instr.c. */
+typedef struct {
     uint64_t instr_count;
     int      current_idx;
     bool     in_warmup;
@@ -190,14 +191,22 @@ static struct {
     uint64_t next_stop;
     uint64_t countdown_overflow;
     /*
-     * Instructions that raised a synchronous exception inside the current
-     * traced window. They are neither traced nor counted in the window (so
-     * a window of N instructions yields exactly N trace entries), and are
-     * added back to instr_count when the window ends so later simpoints
-     * stay aligned with the BBV instruction counts.
+     * PC-based simpoints only: instructions that raised a synchronous
+     * exception inside the current traced window, added back to
+     * instr_count when the window ends. Interval mode counts retired
+     * instructions only, everywhere (see simpoint_pending_insn_faulted).
      */
     uint64_t window_faults;
-} sp_state = { .current_idx = -1, .mode = SIMPOINT_MODE_INACTIVE};
+    /*
+     * filter=process: page-table root of the process that reached START_PC
+     * (0 = not filtering), and whether that process is currently switched
+     * out. While paused, nothing is counted or traced; in COUNTING mode the
+     * countdown is parked in paused_remaining (see simpoint_set_countdown).
+     */
+    uint64_t program_root;
+    bool     paused;
+    uint64_t paused_remaining;
+} simpoint_state_t;
 
 typedef struct {
     bool should_trace;

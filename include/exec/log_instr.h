@@ -376,8 +376,35 @@ void qemu_simpoint_enter_stepping(CPUArchState *env);
 /* Before a TB runs: handle reaching START_PC; true = exit and retranslate. */
 bool qemu_simpoint_at_start_pc(CPUArchState *env, target_ulong tb_pc);
 
+/* After a page-table base (satp) write: filter=process pause/resume. */
+void qemu_simpoint_address_space_changed(CPUArchState *env);
+
 /* Should the TB being translated carry the inline countdown check? */
 bool qemu_simpoint_tb_needs_countdown(CPUArchState *env, uint32_t cflags);
+
+/*
+ * A countdown TB is being left at instruction @insn_idx, which did not
+ * complete (synchronous exception or forced re-execution); called from
+ * cpu_restore_state_from_tb().
+ */
+void qemu_simpoint_unwind_tb(CPUState *cpu, struct TranslationBlock *tb,
+                             int insn_idx);
+
+/*
+ * Translation time: with filter=process, notes user TBs translated without
+ * logging while our program is switched out during a traced window.
+ */
+void qemu_simpoint_note_translation(CPUArchState *env, bool logging);
+
+/* Built-in BBV, translation time: start / end of translating a TB. */
+void qemu_simpoint_bbv_tb_begin(void);
+void *qemu_simpoint_bbv_tb_done(uint64_t last_pc);
+
+/* Built-in BBV: counter for the block starting at @pc (translation time). */
+#ifndef QEMU_SIMPOINT_BBV_COUNTER_DECLARED
+#define QEMU_SIMPOINT_BBV_COUNTER_DECLARED
+uint64_t *qemu_simpoint_bbv_counter(uint64_t pc);
+#endif
 
 /*
  * Called from the main loop when a TB exited with TB_EXIT_REQUESTED.
@@ -419,7 +446,12 @@ static inline void qemu_simpoint_step_to_start_pc(CPUArchState *env, target_ulon
 static inline bool qemu_simpoint_tb_contains_start_pc(target_ulong tb_pc, uint32_t tb_size) { return false; }
 static inline void qemu_simpoint_enter_stepping(CPUArchState *env) {}
 static inline bool qemu_simpoint_at_start_pc(CPUArchState *env, target_ulong tb_pc) { return false; }
+static inline void qemu_simpoint_address_space_changed(CPUArchState *env) {}
 static inline bool qemu_simpoint_tb_needs_countdown(CPUArchState *env, uint32_t cflags) { return false; }
+static inline void qemu_simpoint_unwind_tb(CPUState *cpu, struct TranslationBlock *tb, int insn_idx) {}
+static inline void qemu_simpoint_note_translation(CPUArchState *env, bool logging) {}
+static inline void qemu_simpoint_bbv_tb_begin(void) {}
+static inline void *qemu_simpoint_bbv_tb_done(uint64_t last_pc) { return NULL; }
 static inline bool qemu_simpoint_handle_countdown_exit(CPUState *cpu, struct TranslationBlock *tb) { return false; }
 static inline void qemu_log_instr_drop_last_mem(CPUArchState *env) {}
 #endif /* ! CONFIG_TCG_LOG_INSTR */
